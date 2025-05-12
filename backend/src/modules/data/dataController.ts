@@ -289,6 +289,95 @@ class DataController {
       res.status(500).json({ message: 'Error fetching trading pairs', error: error.message });
     }
   }
+
+  // Method to pause a job (using data flag)
+  async pauseJob(req: Request, res: Response): Promise<void> {
+    const jobId = req.params.jobId;
+    logger.debug(`[Controller][pauseJob] Attempting to pause job with ID: ${jobId} by setting data flag.`);
+    try {
+      const job = await dataQueue.getJob(jobId);
+      if (!job) {
+        logger.warn(`[Controller][pauseJob] Job not found: ${jobId}`);
+        res.status(404).json({ message: 'Job not found' });
+        return;
+      }
+
+      const currentState = await job.getState();
+      logger.debug(`[Controller][pauseJob] Current state for job ${jobId}: ${currentState}`);
+
+      // Разрешаем паузу только для waiting или wait
+      if (currentState !== 'waiting' && currentState !== 'wait') {
+        logger.warn(`[Controller][pauseJob] Job ${jobId} cannot be paused from state: ${currentState}. Only waiting/wait allowed.`);
+        res.status(400).json({ message: `Job cannot be paused from state: ${currentState}. Only waiting/wait allowed.` });
+        return;
+      }
+
+      // Добавляем флаг в данные
+      const currentData = job.data || {};
+      currentData.isUserPaused = true;
+
+      logger.debug(`[Controller][pauseJob] Updating job ${jobId} data with isUserPaused=true:`, currentData);
+      await (job as any).update(currentData); // Используем as any для update
+
+      logger.info(`[Controller][pauseJob] Job ${jobId} marked as paused via data flag.`);
+      res.status(200).json({ message: 'Job marked as paused. It will be skipped by the worker.' });
+    } catch (error: any) {
+      logger.error(`[Controller][pauseJob] Error marking job ${jobId} as paused:`, error);
+      res.status(500).json({ message: error.message || 'Internal server error while marking job as paused' });
+    }
+  }
+
+  // Method to resume a job (using data flag)
+  async resumeJob(req: Request, res: Response): Promise<void> {
+    const jobId = req.params.jobId;
+    logger.debug(`[Controller][resumeJob] Attempting to resume job with ID: ${jobId} by removing data flag.`);
+    try {
+      const job = await dataQueue.getJob(jobId);
+      if (!job) {
+        logger.warn(`[Controller][resumeJob] Job not found: ${jobId}`);
+        res.status(404).json({ message: 'Job not found' });
+        return;
+      }
+
+      const currentState = await job.getState();
+      logger.debug(`[Controller][resumeJob] Current state for job ${jobId}: ${currentState}`);
+      const currentData = job.data || {};
+
+      // Проверяем, был ли установлен флаг
+      if (currentData.isUserPaused !== true) {
+          logger.warn(`[Controller][resumeJob] Job ${jobId} was not marked as paused via data flag. Cannot resume.`);
+          // Возвращаем 200 OK, так как технически нет ошибки, просто нечего делать
+          // Или можно вернуть 400, если считаем это ошибкой клиента
+          res.status(200).json({ message: 'Job was not paused via data flag.' });
+          return;
+      }
+
+      // Удаляем флаг (или устанавливаем в false)
+      delete currentData.isUserPaused; 
+      // или currentData.isUserPaused = false; 
+
+      logger.debug(`[Controller][resumeJob] Updating job ${jobId} data to remove isUserPaused flag:`, currentData);
+      await (job as any).update(currentData); // Используем as any для update
+      
+      // Если задача была переведена воркером в delayed, попытаемся ее продвинуть
+      if (currentState === 'delayed') { 
+          try {
+              logger.info(`[Controller][resumeJob] Job ${jobId} is in delayed state, attempting to promote.`);
+              await (job as any).promote(); // Используем as any для promote
+              logger.info(`[Controller][resumeJob] Job ${jobId} promoted successfully.`);
+          } catch (promoteError: any) {
+              // Логируем ошибку, но не прерываем основной ответ, так как флаг снят
+              logger.error(`[Controller][resumeJob] Failed to promote job ${jobId} after removing pause flag:`, promoteError);
+          }
+      }
+
+      logger.info(`[Controller][resumeJob] Job ${jobId} resumed via data flag.`);
+      res.status(200).json({ message: 'Job resumed successfully (pause flag removed).' });
+    } catch (error: any) {
+      logger.error(`[Controller][resumeJob] Error resuming job ${jobId}:`, error);
+      res.status(500).json({ message: error.message || 'Internal server error while resuming job' });
+    }
+  }
 }
 
 export default new DataController(); 

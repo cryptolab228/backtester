@@ -5,7 +5,9 @@ import * as okxService from '@/services/okxService';
 import { dataService } from '@/services/dataService';
 
 // Интерфейсы для данных задач
-interface FetchPairsJobData {}
+interface FetchPairsJobData {
+  isUserPaused?: boolean;
+}
 
 interface FetchCandlesJobData {
   symbol: string;
@@ -13,6 +15,7 @@ interface FetchCandlesJobData {
   startTime?: number;
   endTime?: number;
   limit?: number;
+  isUserPaused?: boolean;
 }
 
 type DataJobData = FetchPairsJobData | FetchCandlesJobData;
@@ -76,6 +79,24 @@ const processFetchCandles = async (job: Job<FetchCandlesJobData>) => {
 // Главный процессор задач для очереди данных
 const dataProcessor = async (job: Job<DataJobData>) => {
   logger.debug(`[Worker] Picked up job ${job.name} (ID: ${job.id}).`); // Лог получения задачи воркером
+
+  // ---> Проверка флага isUserPaused <--- 
+  if (job.data?.isUserPaused === true) {
+    logger.info(`[Worker] Job ${job.id} (${job.name}) is paused by user. Attempting to move to delayed state and skipping processing.`);
+    try {
+      // Перемещаем в delayed на очень долгий срок (имитация паузы)
+      const VERY_LARGE_DELAY = 24 * 60 * 60 * 1000 * 365 * 10; // 10 лет
+      await (job as any).moveToDelayed(Date.now() + VERY_LARGE_DELAY, undefined, true); // Добавлен токен и флаг
+      logger.info(`[Worker] Job ${job.id} successfully moved to delayed state due to user pause.`);
+      return; // Важно! Завершаем обработку этой задачи воркером
+    } catch (delayError: any) {
+      logger.error(`[Worker] Failed to move user-paused job ${job.id} to delayed state: ${delayError.message}. Job will remain in its current state but processing will be skipped.`, { stack: delayError.stack });
+      // Даже если не удалось переместить, не обрабатываем ее
+      return; 
+    }
+  }
+  // -------------------------------------
+
   switch (job.name) {
     case JOB_TYPES.FETCH_PAIRS:
       await processFetchPairs(job as Job<FetchPairsJobData>);

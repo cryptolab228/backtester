@@ -136,7 +136,7 @@ export interface Job {
   finishedOn: number | null;
   processedOn: number | null;
   opts: JobOpts; // Используем новый, более точный тип JobOpts
-  status?: string; // Нестандартное поле, которое мы можем добавить на клиенте для удобства
+  status: JobStatus; // Изменено: поле status теперь обязательное и соответствует типу JobStatus
   // Добавьте другие поля, которые возвращает toJSON() задачи BullMQ, если они нужны
 }
 
@@ -168,5 +168,37 @@ export const removeJob = async (jobId: string): Promise<{ message: string }> => 
 
 export const retryJob = async (jobId: string): Promise<{ message: string }> => {
   const response = await apiClient.post(`/data/queue/jobs/${jobId}/retry`);
+  return response.data;
+};
+
+export const pauseJob = async (jobId: string): Promise<{ message: string }> => {
+  console.debug(`[ApiService] Pausing job: ${jobId}`);
+  try {
+    const response = await apiClient.post<{ message: string }>(`/data/queue/jobs/${jobId}/pause`);
+    console.info(`[ApiService] Job ${jobId} pause request successful:`, response.data.message);
+    return response.data;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error during job pause';
+    console.error(`[ApiService] Error pausing job ${jobId}:`, errorMessage, error);
+    // Re-throw a more specific error or handle it as needed
+    throw new Error(`Failed to pause job ${jobId}: ${errorMessage}`);
+  }
+};
+
+export const resumeJob = async (jobId: string): Promise<{ message: string }> => {
+  console.debug(`[ApiService] Resuming job: ${jobId}`);
+  try {
+    const response = await apiClient.post<{ message: string }>(`/data/queue/jobs/${jobId}/resume`);
+    console.info(`[ApiService] Job ${jobId} resume request successful:`, response.data.message);
+    return response.data;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error during job resume';
+    console.error(`[ApiService] Error resuming job ${jobId}:`, errorMessage, error);
+    throw new Error(`Failed to resume job ${jobId}: ${errorMessage}`);
+  }
+};
+
+export const getJobCounts = async (): Promise<JobCounts> => {
+  const response = await apiClient.get('/data/queue/job-counts');
   return response.data;
 }; 

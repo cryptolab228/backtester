@@ -4,6 +4,7 @@ import router from './router' // Импортируем роутер
 import { createPinia } from 'pinia' // Импортируем Pinia
 import PrimeVue from 'primevue/config';
 import ToastService from 'primevue/toastservice';
+import ConfirmationService from 'primevue/confirmationservice'; // <--- Добавлен импорт
 import Tooltip from 'primevue/tooltip'; // <--- Импортировать Tooltip
 // import Aura from 'primevue/themes/aura';      // Временно закомментировано
 import 'primeicons/primeicons.css';         // Иконки
@@ -22,6 +23,7 @@ app.use(createPinia()); // Подключаем Pinia
 app.use(router); // Подключаем роутер
 app.use(PrimeVue, { ripple: true, router: router }); // Используем PrimeVue. Добавлен router в конфигурацию
 app.use(ToastService); // Подключаем ToastService
+app.use(ConfirmationService); // <--- Добавлена регистрация сервиса
 app.directive('tooltip', Tooltip); // <--- Зарегистрировать директиву Tooltip
 
 app.mount('#app');
