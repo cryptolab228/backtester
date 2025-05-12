@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "lodash": "^4.17.21",
+    "technicalindicators": "^3.1.0"
+  }
+}
