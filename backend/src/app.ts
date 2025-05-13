@@ -2,9 +2,12 @@
 import 'reflect-metadata'; // Должен быть импортирован первым!
 import express, { Express, Request, Response } from 'express';
 import cors from 'cors'; // <-- Импортируем cors
+import http from 'http'; // <--- Добавлен импорт http
 import config from '@/config';
 import logger from '@/utils/logger';
 import { initializeDataSource } from '@/config/dataSource';
+import { initWebSocket } from '@/websocket'; // <--- Добавлен импорт initWebSocket
+import { attachQueueEventListeners } from '@/config/queue'; // <--- Импортируем функцию
 // import { initializeScheduler } from '@/config/queue'; // Комментируем импорт
 
 // Добавляем небольшую задержку перед инициализацией воркера
@@ -62,8 +65,20 @@ async function startServer() {
 
     // Здесь позже добавим роутеры для бектеста и сканера
 
-    app.listen(port, () => {
+    // --- Создание HTTP сервера и запуск --- 
+    const httpServer = http.createServer(app); // Создаем HTTP сервер
+
+    // --- Инициализация WebSocket --- 
+    initWebSocket(httpServer); // Передаем HTTP сервер в инициализатор WebSocket
+
+    // --->>> ВЫЗОВ ДОБАВЛЕНИЯ СЛУШАТЕЛЕЙ СОБЫТИЙ ОЧЕРЕДИ <<<---
+    attachQueueEventListeners(); // Вызываем после инициализации WS и dataQueue
+    // ------------------------------------------------------------
+
+    // --- Запуск сервера --- 
+    httpServer.listen(port, () => {
       logger.info(`⚡️[server]: Server is running at http://localhost:${port}`);
+      logger.info(`⚡️[websocket]: WebSocket server is listening on the same port.`); // Добавлен лог для WS
     });
 
   } catch (error) {

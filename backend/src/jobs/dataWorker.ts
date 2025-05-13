@@ -1,8 +1,9 @@
-import { Job } from 'bullmq';
+import { Job, JobProgress } from 'bullmq';
 import logger from '@/utils/logger';
-import { createWorker, DATA_QUEUE_NAME, dataQueue } from '@/config/queue';
+import { createWorker, DATA_QUEUE_NAME, dataQueue, broadcastJobCounts } from '@/config/queue';
 import * as okxService from '@/services/okxService';
 import { dataService } from '@/services/dataService';
+import { broadcast } from '@/websocket';
 
 // Интерфейсы для данных задач
 interface FetchPairsJobData {
@@ -115,23 +116,98 @@ const dataProcessor = async (job: Job<DataJobData>) => {
 const worker = createWorker<DataJobData>(DATA_QUEUE_NAME, dataProcessor);
 
 // --- Добавляем слушателей событий к созданному воркеру --- 
-worker.on('active', (job: Job) => {
-  logger.debug(`[Queue Events] Job ${job.name} (ID: ${job.id}) is active.`);
+worker.on('completed', async (job: Job, result: any) => {
+  const jobId = job?.id; // Определяем jobId здесь
+  const jobName = job?.name || 'unknown';
+  logger.info(`[Queue Events][Worker] Job ${jobName} (ID: ${jobId || 'unknown'}) completed successfully.`);
+
+  try {
+    if (typeof jobId === 'string') { // Проверяем, что jobId это строка
+      const currentJob = await dataQueue.getJob(jobId); // <--- ИСПОЛЬЗУЕМ ПРОВЕРЕННЫЙ jobId
+      if (currentJob) {
+        // ... остальная логика broadcast ...
+        broadcast({
+          type: 'job_updated',
+          jobId: currentJob.id, // ID из currentJob
+          name: currentJob.name,
+          status: 'completed',
+          timestamp: currentJob.timestamp ? new Date(currentJob.timestamp).toISOString() : new Date().toISOString(),
+          data: currentJob.data,
+          opts: currentJob.opts,
+          attemptsMade: currentJob.attemptsMade,
+          processedOn: currentJob.processedOn ? new Date(currentJob.processedOn).toISOString() : null,
+          finishedOn: currentJob.finishedOn ? new Date(currentJob.finishedOn).toISOString() : new Date().toISOString(),
+          failedReason: currentJob.failedReason,
+          progress: currentJob.progress,
+          returnValue: result
+        });
+        logger.debug(`[Worker Listener - completed] Broadcast sent for job ${jobId}.`);
+      } else {
+        logger.warn(`[Worker Listener - completed] Could not get job ${jobId} from queue for broadcasting.`);
+      }
+    } else {
+      logger.warn(`[Worker Listener - completed] Job ID is undefined. Skipping broadcast for job object:`, job);
+    }
+    broadcastJobCounts();
+  } catch (error) {
+    logger.error(`[Worker Listener - completed] Error during broadcast for job ${jobId || 'unknown'}:`, error);
+    broadcastJobCounts();
+  }
 });
 
-worker.on('completed', (job: Job, result: any) => {
-  // Используем logger.info для успешного завершения
-  logger.info(`[Queue Events] Job ${job.name} (ID: ${job.id}) completed successfully.`);
-  // Старый debug лог можно оставить, если он полезен
-  logger.debug(`Job ${job.name} (ID: ${job.id}) completed.`);
-});
+// --- Обработчик 'failed' --- 
+worker.on('failed', async (job: Job | undefined, error: Error) => {
+  const jobId = job?.id;
+  const jobName = job?.name || 'unknown';
+  logger.error(`[Queue Events][Worker] Job ${jobName} (ID: ${jobId || 'unknown'}) failed:`, error);
+  try {
+    let jobDataToSend: any;
+    let currentJob: Job | null = null;
+    if (job && job.id) {
+       currentJob = await dataQueue.getJob(job.id); 
+    }
+    
+    if(currentJob) {
+      jobDataToSend = {
+        type: 'job_updated',
+        jobId: currentJob.id,
+        name: currentJob.name,
+        status: 'failed', 
+        timestamp: currentJob.timestamp ? new Date(currentJob.timestamp).toISOString() : null,
+        processedOn: currentJob.processedOn ? new Date(currentJob.processedOn).toISOString() : null,
+        finishedOn: currentJob.finishedOn ? new Date(currentJob.finishedOn).toISOString() : new Date().toISOString(),
+        failedReason: currentJob.failedReason || error.message,
+        stacktrace: currentJob.stacktrace || (error.stack ? error.stack.split('\n') : null),
+        data: currentJob.data,
+        opts: currentJob.opts,
+        attemptsMade: currentJob.attemptsMade
+      };
+      logger.debug(`[Worker Listener - failed] Broadcast sent for job ${jobId || 'unknown'}.`);
+    } else {
+      logger.warn(`[Worker Listener - failed] Could not get job ${jobId || 'unknown'} from queue. Broadcasting minimal info.`);
+       jobDataToSend = {
+        type: 'job_updated',
+        jobId: jobId || 'unknown',
+        name: jobName,
+        status: 'failed',
+        failedReason: error.message,
+        timestamp: new Date().toISOString() 
+      };
+    }
+    broadcast(jobDataToSend);
+    
+    // ---> Убираем if (typeof jobId === 'string') вокруг broadcastJobCounts <--- 
+    // Логирование, вызывавшее ошибку, уже закомментировано.
+    // Вызываем broadcastJobCounts в любом случае, т.к. он не зависит от jobId.
+    logger.debug(`[Worker Listener - failed] Broadcasting job counts after attempting to process job ${jobId || 'unknown'}.`);
+    broadcastJobCounts(); 
 
-worker.on('failed', (job: Job | undefined, error: Error) => {
-  if (job) {
-    logger.error(`[Queue Events] Job ${job.name} (ID: ${job.id}) failed:`, error);
-  } else {
-    // Это может произойти, если ошибка случилась до того, как job стал доступен
-    logger.error(`[Queue Events] A job failed (job data unavailable):`, error);
+  } catch(broadcastError) { 
+    logger.error(`[Worker Listener - failed] Error during broadcast for job ${jobId || 'unknown'}:`, broadcastError);
+    // ---> Убираем if (typeof jobId === 'string') вокруг broadcastJobCounts <--- 
+    // Вызываем broadcastJobCounts в любом случае, т.к. он не зависит от jobId.
+    logger.debug(`[Worker Listener - failed] Attempting to broadcast job counts despite broadcast error for job ${jobId || 'unknown'}.`);
+    broadcastJobCounts(); 
   }
 });
 

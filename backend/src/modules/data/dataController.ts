@@ -5,6 +5,109 @@ import logger from '@/utils/logger';
 import { Job, JobType } from 'bullmq';
 import { dataService } from '@/services/dataService';
 
+// --- Вынесенная логика для получения данных об очередях --- 
+
+/**
+ * Получает и форматирует счетчики задач из очереди.
+ * @returns {Promise<{ [key: string]: number }>} Объект со счетчиками задач.
+ */
+export const getSanitizedJobCounts = async (): Promise<{ [key: string]: number }> => {
+  logger.debug('[DataLogic][getSanitizedJobCounts] Fetching job counts...');
+  const jobTypesForCounts: JobType[] = ['active', 'wait', 'waiting', 'completed', 'failed', 'delayed', 'paused', 'prioritized'];
+  const counts = await dataQueue.getJobCounts(...jobTypesForCounts);
+  logger.debug(`[DataLogic][getSanitizedJobCounts] Raw counts from BullMQ: ${JSON.stringify(counts)}`);
+
+  const sanitizedCounts: { [key: string]: number } = {};
+  jobTypesForCounts.forEach(status => {
+    sanitizedCounts[status] = 0;
+  });
+  for (const status in counts) {
+    if (Object.prototype.hasOwnProperty.call(counts, status)) {
+        sanitizedCounts[status as JobType] = counts[status as keyof typeof counts] || 0;
+    }
+  }
+
+  // Объединение wait и waiting для консистентности, если нужно
+  if (sanitizedCounts.wait !== undefined) {
+      sanitizedCounts.waiting = (sanitizedCounts.waiting || 0) + sanitizedCounts.wait;
+      // delete sanitizedCounts.wait; // Можно раскомментировать, если 'wait' не нужен отдельно
+  }
+
+  logger.debug(`[DataLogic][getSanitizedJobCounts] Returning sanitized counts: ${JSON.stringify(sanitizedCounts)}`);
+  return sanitizedCounts;
+};
+
+/**
+ * Получает список задач с отформатированными данными.
+ * @param {object} [options] Опции для получения задач.
+ * @param {JobType[]} [options.status] Массив статусов для фильтрации.
+ * @param {number} [options.start=0] Начальный индекс.
+ * @param {number} [options.end=-1] Конечный индекс.
+ * @returns {Promise<any[]>} Массив отформатированных задач.
+ */
+export const getJobsWithSanitizedData = async (options?: {
+  status?: JobType[];
+  start?: number;
+  end?: number;
+}): Promise<any[]> => {
+  const { status, start = 0, end = -1 } = options || {};
+  logger.debug(`[DataLogic][getJobsWithSanitizedData] Fetching jobs with options: status=${JSON.stringify(status)}, start=${start}, end=${end}`);
+
+  const validJobTypes: JobType[] = ['active', 'wait', 'waiting', 'completed', 'failed', 'delayed', 'paused', 'prioritized'];
+  let typesToFetch: JobType[] = [];
+
+  if (status && Array.isArray(status)) {
+      typesToFetch = status.filter(t => validJobTypes.includes(t));
+  } else {
+      typesToFetch = [...validJobTypes]; // По умолчанию получаем все типы
+      logger.debug(`[DataLogic][getJobsWithSanitizedData] No specific status requested. Fetching all valid types by default.`);
+  }
+  
+  logger.debug(`[DataLogic][getJobsWithSanitizedData] Types to fetch from BullMQ: ${JSON.stringify(typesToFetch)}`);
+
+  if (typesToFetch.length === 0 && status && Array.isArray(status)) {
+    logger.warn(`[DataLogic][getJobsWithSanitizedData] No valid job types to fetch after filtering requested statuses: ${JSON.stringify(status)}. Returning empty array.`);
+    return [];
+  }
+  if (typesToFetch.length === 0 && !status) {
+      logger.error(`[DataLogic][getJobsWithSanitizedData] Catastrophic: typesToFetch is empty even when requesting all types. Check 'validJobTypes'. Returning empty array.`);
+      return [];
+  }
+
+  const jobs = await dataQueue.getJobs(typesToFetch, Number(start), Number(end));
+  logger.debug(`[DataLogic][getJobsWithSanitizedData] Fetched ${jobs.length} jobs from queue with types: ${JSON.stringify(typesToFetch)}`);
+
+  // Используем Promise.all для параллельного получения статуса
+  const jobsWithDetails = await Promise.all(jobs.map(async (job: Job) => {
+    try {
+      const jobStatus = await job.getState();
+      return {
+        id: job.id,
+        name: job.name,
+        data: job.data,
+        progress: job.progress,
+        attemptsMade: job.attemptsMade,
+        failedReason: job.failedReason,
+        timestamp: job.timestamp ? new Date(job.timestamp).toISOString() : null,
+        finishedOn: job.finishedOn ? new Date(job.finishedOn).toISOString() : null,
+        processedOn: job.processedOn ? new Date(job.processedOn).toISOString() : null,
+        status: jobStatus
+      };
+    } catch (jobError: any) {
+        logger.error(`[DataLogic][getJobsWithSanitizedData] Error processing job ${job?.id || 'UNKNOWN'}: ${jobError.message}`, { stack: jobError.stack });
+        // Возвращаем базовую информацию об ошибке или null/пустой объект, чтобы не прерывать весь Promise.all
+        return { id: job?.id, name: job?.name, status: 'unknown', error: 'Failed to process job details' }; 
+    }
+  }));
+  
+  // Отфильтруем возможные ошибки, если возвращали не null
+  const validJobs = jobsWithDetails.filter(job => job && job.status !== 'unknown');
+  logger.debug(`[DataLogic][getJobsWithSanitizedData] Returning ${validJobs.length} sanitized jobs.`);
+  return validJobs;
+};
+
+// --- Класс контроллера --- 
+
 class DataController {
   /**
    * Добавляет задачу на получение списка всех фьючерсных пар.
@@ -125,93 +228,50 @@ class DataController {
   // --- Методы для управления очередью ---
 
   async getQueueJobCounts(req: Request, res: Response): Promise<void> {
-    logger.debug('[Controller][getJobCounts] Received request to get job counts.');
+    logger.debug('[Controller][getJobCounts] Received HTTP request to get job counts.');
     try {
-      const jobTypesForCounts: JobType[] = ['active', 'wait', 'waiting', 'completed', 'failed', 'delayed', 'paused', 'prioritized'];
-      const counts = await dataQueue.getJobCounts(...jobTypesForCounts);
-      logger.debug(`[Controller][getJobCounts] Raw counts from BullMQ: ${JSON.stringify(counts)}`);
-      
-      const sanitizedCounts: { [key: string]: number } = {};
-      jobTypesForCounts.forEach(status => {
-        sanitizedCounts[status] = 0;
-      });
-      for (const status in counts) {
-        if (Object.prototype.hasOwnProperty.call(counts, status)) {
-            sanitizedCounts[status as JobType] = counts[status as keyof typeof counts] || 0;
-        }
-      }
-
-      if (sanitizedCounts.wait !== undefined && sanitizedCounts.waiting === 0) {
-        sanitizedCounts.waiting = sanitizedCounts.wait;
-      }
-
-      logger.info(`[Controller][getJobCounts] Sanitized counts being sent to frontend: ${JSON.stringify(sanitizedCounts)}`);
+      const sanitizedCounts = await getSanitizedJobCounts(); // Используем вынесенную функцию
+      logger.info(`[Controller][getJobCounts] Sending sanitized counts via HTTP: ${JSON.stringify(sanitizedCounts)}`);
       res.status(200).json(sanitizedCounts);
     } catch (error: any) {
-      logger.error('[Controller][getJobCounts] Error fetching job counts:', { message: error.message, stack: error.stack });
+      logger.error('[Controller][getJobCounts] Error getting/sending job counts via HTTP:', { message: error.message, stack: error.stack });
       res.status(500).json({ message: 'Error fetching job counts' });
     }
   }
 
   async getJobs(req: Request, res: Response): Promise<void> {
     const { status, start = 0, end = -1 } = req.query;
-    logger.debug(`[Controller][getJobs] Received request with query: status=${JSON.stringify(status)}, start=${start}, end=${end}`);
-
-    const validJobTypes: JobType[] = ['active', 'wait', 'waiting', 'completed', 'failed', 'delayed', 'paused', 'prioritized'];
-    let typesToFetch: JobType[] = [];
-
-    if (status && typeof status === 'string' && status.toLowerCase() === 'all') {
-        typesToFetch = [...validJobTypes];
-        logger.debug(`[Controller][getJobs] Client requested 'all' statuses. Fetching all valid types.`);
-    } else if (status) {
-      const requestedTypes = Array.isArray(status) ? status as string[] : [status as string];
-      logger.debug(`[Controller][getJobs] Requested types from query: ${JSON.stringify(requestedTypes)}`);
-      typesToFetch = requestedTypes.filter(t => validJobTypes.includes(t as JobType)) as JobType[];
-    } else {
-      typesToFetch = [...validJobTypes];
-      logger.debug(`[Controller][getJobs] No specific status requested. Fetching all valid types by default (including completed).`);
-    }
-    
-    logger.debug(`[Controller][getJobs] Types to fetch from BullMQ after filtering/defaulting: ${JSON.stringify(typesToFetch)}`);
-
-    if (typesToFetch.length === 0 && status && !(typeof status === 'string' && status.toLowerCase() === 'all')) {
-      logger.warn(`[Controller][getJobs] No valid job types to fetch after filtering requested statuses: ${JSON.stringify(status)}. Returning empty array.`);
-      res.status(200).json([]);
-      return;
-    }
-     if (typesToFetch.length === 0 && (!status || (typeof status === 'string' && status.toLowerCase() === 'all'))) {
-        logger.error(`[Controller][getJobs] Catastrophic: typesToFetch is empty even when requesting all types. Check 'validJobTypes'. Returning empty array.`);
-        res.status(200).json([]);
-        return;
-    }
+    logger.debug(`[Controller][getJobs] Received HTTP request with query: status=${JSON.stringify(status)}, start=${start}, end=${end}`);
 
     try {
-      const jobs = await dataQueue.getJobs(typesToFetch, Number(start), Number(end));
-      logger.debug(`[Controller][getJobs] Fetched ${jobs.length} jobs from queue with types: ${JSON.stringify(typesToFetch)}`);
+      // Преобразуем статус запроса в массив JobType[] для вынесенной функции
+      let statusFilter: JobType[] | undefined = undefined;
+      const validJobTypes: JobType[] = ['active', 'wait', 'waiting', 'completed', 'failed', 'delayed', 'paused', 'prioritized'];
+      if (status && typeof status === 'string' && status.toLowerCase() !== 'all') {
+          const requestedTypes = Array.isArray(status) ? status as string[] : [status as string];
+          statusFilter = requestedTypes.filter(t => validJobTypes.includes(t as JobType)) as JobType[];
+          if (statusFilter.length === 0) {
+              logger.warn(`[Controller][getJobs] No valid job types found in HTTP request status filter: ${JSON.stringify(status)}. Returning empty array.`);
+              res.status(200).json([]);
+              return;
+          }
+      } // Если status не задан или 'all', statusFilter остается undefined, и getJobsWithSanitizedData вернет все типы
+       else if (status && typeof status !== 'string') { // Handle invalid status type
+          logger.warn(`[Controller][getJobs] Invalid status type in HTTP request: ${typeof status}. Ignoring status filter.`);
+      }
 
-      const jobsWithDetails = await Promise.all(jobs.map(async job => {
-        const jobStatus = await job.getState();
-        return {
-          id: job.id,
-          name: job.name,
-          data: job.data,
-          progress: job.progress,
-          attemptsMade: job.attemptsMade,
-          failedReason: job.failedReason,
-          timestamp: job.timestamp ? new Date(job.timestamp).toISOString() : null,
-          finishedOn: job.finishedOn ? new Date(job.finishedOn).toISOString() : null,
-          processedOn: job.processedOn ? new Date(job.processedOn).toISOString() : null,
-          status: jobStatus
-        };
-      }));
+      const jobsWithDetails = await getJobsWithSanitizedData({ 
+        status: statusFilter, 
+        start: Number(start), 
+        end: Number(end) 
+      });
+      logger.debug(`[Controller][getJobs] Sending ${jobsWithDetails.length} jobs via HTTP.`);
       res.status(200).json(jobsWithDetails);
     } catch (error: any) {
-      logger.error('[Controller][getJobs] Error fetching jobs from queue:', { 
+      logger.error('[Controller][getJobs] Error fetching/sending jobs via HTTP:', { 
         message: error.message, 
         stack: error.stack,
-        typesToFetch,
-        start,
-        end 
+        query: req.query 
       });
       res.status(500).json({ message: 'Error fetching jobs' });
     }
