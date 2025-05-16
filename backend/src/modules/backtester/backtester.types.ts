@@ -48,8 +48,9 @@ export interface BacktestMetrics {
   avgLosingTrade?: number;
   sharpeRatio?: number; // (Пока можно опустить, требует Risk-Free Rate)
   sortinoRatio?: number; // (Пока можно опустить)
-  expectancy?: number; // (Win Rate * Avg Win) - (Loss Rate * Avg Loss)
+  expectancy?: number; // (Win Rate (0-1) * Avg Win) - (Loss Rate (0-1) * Avg Loss)
   durationMs?: number; // Время выполнения бэктеста
+  equityCurve?: Array<{ timestamp: number; capital: number }>; // Динамика капитала
 }
 
 // Полный результат одного бэктеста

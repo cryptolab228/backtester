@@ -17,6 +17,7 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 // Импортируем воркер, чтобы он запустился (перенесено в startServer)
 // import '@/jobs/dataWorker'; 
 import dataRoutes from '@/modules/data/dataRoutes'; // Импорт роутов данных
+import settingsRoutes from '@/modules/settings/settingsRoutes'; // <-- Импорт роутов настроек
 import DataController from '@/modules/data/dataController'; // <--- Явный импорт DataController
 
 async function startServer() {
@@ -62,6 +63,9 @@ async function startServer() {
 
     // Подключаем роуты модуля данных
     app.use('/api/data', dataRoutes);
+
+    // Подключаем роуты модуля настроек
+    app.use('/api/settings', settingsRoutes); // <-- Подключение роутов настроек
 
     // Здесь позже добавим роутеры для бектеста и сканера
 

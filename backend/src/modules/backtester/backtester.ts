@@ -16,32 +16,47 @@ import { v4 as uuidv4 } from 'uuid';
 const calculatePositionSize = (
   currentCapital: number,
   entryPrice: number,
-  riskSettings?: RiskManagementSettings,
-  // currentCandle?: StrategyCandle // Пока не используется для Варианта 1, но понадобится для Варианта 2
+  currentCandle: StrategyCandle, // Добавлена текущая свеча для доступа к ATR
+  riskSettings?: RiskManagementSettings
 ): number => {
   if (!riskSettings) {
     return 1; // Размер по умолчанию, если настройки риска отсутствуют
   }
 
-  // Вариант 1: Процент от капитала
-  if (riskSettings.positionSizePercentage && riskSettings.positionSizePercentage > 0 && entryPrice > 0) {
-    const capitalToRisk = currentCapital * riskSettings.positionSizePercentage;
-    // Убедимся, что размер позиции не отрицательный и не NaN
-    const size = Math.max(0, capitalToRisk / entryPrice);
-    return size > 0 ? size : 0; // Возвращаем 0, если расчетный размер <= 0
+  // Вариант 2: На основе риска ATR (приоритетный, если есть все данные)
+  if (
+    riskSettings.maxRiskPerTradePercentage &&
+    riskSettings.maxRiskPerTradePercentage > 0 &&
+    riskSettings.stopLossMultiplier &&
+    riskSettings.stopLossMultiplier > 0 &&
+    currentCandle.atr &&
+    currentCandle.atr > 0 &&
+    entryPrice > 0 // Убедимся, что цена входа валидна
+  ) {
+    const riskPerTradeCapital = currentCapital * riskSettings.maxRiskPerTradePercentage;
+    // Сумма, которую мы готовы потерять на одну единицу контракта/акции, если сработает SL
+    const atrBasedStopLossAmountPerUnit = currentCandle.atr * riskSettings.stopLossMultiplier;
+
+    if (atrBasedStopLossAmountPerUnit > 0) {
+      const size = riskPerTradeCapital / atrBasedStopLossAmountPerUnit;
+      // Важно: на данном этапе мы не учитываем комиссию или минимальный размер лота.
+      // Также, размер позиции здесь это количество "единиц", PnL потом будет (цена выхода - цена входа) * размер.
+      // Необходимо убедиться, что у нас достаточно капитала для такой позиции,
+      // но т.к. currentCapital используется для расчета риска, это косвенно учтено.
+      // Для фьючерсов может потребоваться более сложный расчет с учетом плеча и маржи.
+      // Пока оставляем так для простоты.
+      return Math.max(0, size > 0 ? size : 0); // Возвращаем 0, если расчетный размер <= 0
+    }
   }
 
-  // TODO: Вариант 2 (На основе риска ATR)
-  // if (riskSettings.maxRiskPerTradePercentage && riskSettings.stopLossMultiplier && currentCandle?.atr) {
-  //   const riskPerTrade = currentCapital * riskSettings.maxRiskPerTradePercentage;
-  //   const atrBasedStopLossAmount = currentCandle.atr * riskSettings.stopLossMultiplier;
-  //   if (atrBasedStopLossAmount > 0) {
-  //     const size = Math.max(0, riskPerTrade / atrBasedStopLossAmount);
-  //     return size > 0 ? size : 0;
-  //   }
-  // }
+  // Вариант 1: Процент от капитала (используется, если Вариант 2 не сработал)
+  if (riskSettings.positionSizePercentage && riskSettings.positionSizePercentage > 0 && entryPrice > 0) {
+    const capitalToRiskForPosition = currentCapital * riskSettings.positionSizePercentage;
+    const size = capitalToRiskForPosition / entryPrice;
+    return Math.max(0, size > 0 ? size : 0);
+  }
 
-  return 1; // Размер по умолчанию, если ни один из методов не сработал
+  return 1; // Размер по умолчанию, если ни один из методов не сработал или данные некорректны
 };
 
 // Основная функция для проведения бэктеста
@@ -81,6 +96,11 @@ export const runBacktest = async (
   let activeTrade: Trade | null = null;
   let peakCapital = params.initialCapital;
   let maxDrawdown = 0;
+  const equityCurve: Array<{ timestamp: number; capital: number }> = [
+    // Начальная точка капитала
+    // Используем params.startDate, если доступно, иначе первую свечу или 0
+    { timestamp: candles[0]?.timestamp ?? new Date(params.startDate).getTime() ?? 0, capital: params.initialCapital }
+  ];
   // ... другие переменные для расчета метрик (например, grossProfit, grossLoss)
 
   // 3. Итерация по свечам для симуляции торговли
@@ -91,9 +111,60 @@ export const runBacktest = async (
     // Логика управления рисками и размером позиции
     const riskSettings = params.strategyParameters.risk;
     
-    // TODO: Проверка и обработка активной сделки (выход по SL/TP/сигналу)
     if (activeTrade) {
-      // ...логика выхода будет здесь (пункт B.2)...
+      let exitReason: string | undefined = undefined;
+      let exitPrice: number | undefined = undefined;
+
+      // Проверка Stop Loss
+      if (activeTrade.direction === TradeDirection.LONG && activeTrade.stopLoss && currentCandle.low <= activeTrade.stopLoss) {
+        exitReason = 'SL';
+        exitPrice = activeTrade.stopLoss;
+      } else if (activeTrade.direction === TradeDirection.SHORT && activeTrade.stopLoss && currentCandle.high >= activeTrade.stopLoss) {
+        exitReason = 'SL';
+        exitPrice = activeTrade.stopLoss;
+      }
+
+      // Проверка Take Profit (только если SL не сработал на этой же свече)
+      if (!exitReason && activeTrade.takeProfit) {
+        if (activeTrade.direction === TradeDirection.LONG && currentCandle.high >= activeTrade.takeProfit) {
+          exitReason = 'TP';
+          exitPrice = activeTrade.takeProfit;
+        } else if (activeTrade.direction === TradeDirection.SHORT && currentCandle.low <= activeTrade.takeProfit) {
+          exitReason = 'TP';
+          exitPrice = activeTrade.takeProfit;
+        }
+      }
+      
+      // TODO: Добавить логику выхода по противоположному сигналу, если это требуется
+      // TODO: Добавить логику трейлинг-стопа, если это требуется
+
+      if (exitReason && exitPrice !== undefined && typeof currentCandle.timestamp === 'number') {
+        activeTrade.exitTimestamp = currentCandle.timestamp;
+        activeTrade.exitPrice = exitPrice;
+        activeTrade.exitReason = exitReason;
+
+        let pnl = 0;
+        if (activeTrade.direction === TradeDirection.LONG) {
+          pnl = (activeTrade.exitPrice - activeTrade.entryPrice) * activeTrade.size;
+        } else { // SHORT
+          pnl = (activeTrade.entryPrice - activeTrade.exitPrice) * activeTrade.size;
+        }
+        activeTrade.pnl = pnl;
+        currentCapital += pnl;
+        
+        // Обновление пикового капитала и максимальной просадки
+        peakCapital = Math.max(peakCapital, currentCapital);
+        const drawdown = peakCapital > 0 ? ((peakCapital - currentCapital) / peakCapital) * 100 : 0;
+        maxDrawdown = Math.max(maxDrawdown, drawdown);
+
+        trades.push({ ...activeTrade });
+        // Добавляем точку в кривую эквити после закрытия сделки
+        if (activeTrade.exitTimestamp) {
+          equityCurve.push({ timestamp: activeTrade.exitTimestamp, capital: currentCapital });
+        }
+        console.log(`[${new Date(activeTrade.exitTimestamp!).toISOString()}] Closed ${activeTrade.direction} trade. Exit: ${activeTrade.exitPrice}, Reason: ${activeTrade.exitReason}, PnL: ${activeTrade.pnl?.toFixed(2)}, Capital: ${currentCapital.toFixed(2)}`);
+        activeTrade = null;
+      }
     }
 
     // Проверка условий входа и открытие новых сделок
@@ -102,11 +173,9 @@ export const runBacktest = async (
       let positionSize = 0;
       let newTrade: Trade | null = null;
 
-      const atrFromCandle = currentCandle.atr; // Извлекаем ATR заранее
-
       if (currentCandle.entryConditionLong) {
         entryPrice = currentCandle.close; // Пример: вход по цене закрытия сигнальной свечи
-        positionSize = calculatePositionSize(currentCapital, entryPrice, riskSettings);
+        positionSize = calculatePositionSize(currentCapital, entryPrice, currentCandle, riskSettings);
 
         if (typeof currentCandle.timestamp === 'number') {
             if (positionSize > 0 && 
@@ -139,7 +208,7 @@ export const runBacktest = async (
         }
       } else if (currentCandle.entryConditionShort) {
         entryPrice = currentCandle.close; // Пример: вход по цене закрытия сигнальной свечи
-        positionSize = calculatePositionSize(currentCapital, entryPrice, riskSettings);
+        positionSize = calculatePositionSize(currentCapital, entryPrice, currentCandle, riskSettings);
 
         if (typeof currentCandle.timestamp === 'number') {
             if (positionSize > 0 && 
@@ -188,24 +257,50 @@ export const runBacktest = async (
   }
 
   // 4. Расчет финальных метрик
-  // ... на основе списка trades ...
   const totalPnl = trades.reduce((sum, trade) => sum + (trade.pnl || 0), 0);
   const winningTradesCount = trades.filter(t => t.pnl && t.pnl > 0).length;
   const losingTradesCount = trades.filter(t => t.pnl && t.pnl < 0).length;
 
+  let grossProfit = 0;
+  let grossLoss = 0;
+  trades.forEach(trade => {
+    if (trade.pnl && trade.pnl > 0) {
+      grossProfit += trade.pnl;
+    }
+    if (trade.pnl && trade.pnl < 0) {
+      grossLoss += trade.pnl; // grossLoss будет отрицательным
+    }
+  });
+
+  const avgTradePnl = trades.length > 0 ? totalPnl / trades.length : 0;
+  const profitFactor = grossLoss !== 0 ? Math.abs(grossProfit / grossLoss) : grossProfit > 0 ? Infinity : 0;
+
+  const avgWinningTrade = winningTradesCount > 0 ? grossProfit / winningTradesCount : 0;
+  const avgLosingTrade = losingTradesCount > 0 ? grossLoss / losingTradesCount : 0; // grossLoss отрицательный, так что avgLosingTrade тоже будет
+
+  const winRateDecimal = trades.length > 0 ? winningTradesCount / trades.length : 0;
+  const lossRateDecimal = trades.length > 0 ? losingTradesCount / trades.length : 0;
+  // Для expectancy используем абсолютное значение среднего убытка
+  const expectancy = (winRateDecimal * avgWinningTrade) - (lossRateDecimal * Math.abs(avgLosingTrade));
+
   const finalMetrics: BacktestMetrics = {
     totalPnl,
-    totalPnlPercentage: (totalPnl / params.initialCapital) * 100,
+    totalPnlPercentage: params.initialCapital > 0 ? (totalPnl / params.initialCapital) * 100 : 0,
     totalTrades: trades.length,
     winningTrades: winningTradesCount,
     losingTrades: losingTradesCount,
     winRate: trades.length > 0 ? (winningTradesCount / trades.length) * 100 : 0,
-    // maxDrawdown, // Рассчитать корректно
+    maxDrawdown: parseFloat(maxDrawdown.toFixed(2)), // Округляем для консистентности
+    avgTradePnl: parseFloat(avgTradePnl.toFixed(2)),
+    profitFactor: parseFloat(profitFactor.toFixed(2)), // Также округляем
+    avgWinningTrade: parseFloat(avgWinningTrade.toFixed(2)),
+    avgLosingTrade: parseFloat(avgLosingTrade.toFixed(2)), // Будет отрицательным или 0
+    expectancy: parseFloat(expectancy.toFixed(2)),
     durationMs: Date.now() - startTime,
-    // ... другие метрики
+    equityCurve: equityCurve.length > 1 ? equityCurve : undefined, // Возвращаем кривую, если есть хотя бы одна сделка
   };
 
-  console.log(`Backtest for ${params.pairSymbol} completed in ${finalMetrics.durationMs}ms. Trades: ${finalMetrics.totalTrades}, PnL: ${finalMetrics.totalPnl.toFixed(2)}`);
+  console.log(`Backtest for ${params.pairSymbol} completed in ${finalMetrics.durationMs}ms. Trades: ${finalMetrics.totalTrades}, PnL: ${finalMetrics.totalPnl.toFixed(2)}, Max DD: ${finalMetrics.maxDrawdown}%, Expectancy: ${finalMetrics.expectancy?.toFixed(2)}`);
 
   return {
     parameters: params,

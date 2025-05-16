@@ -1,5 +1,12 @@
 ## План Реализации Этапа 3: Базовый Бектест-Движок
 
+**Обновление по Этапу 4: Централизованное Управление Настройками**
+- **Статус Фронтенд:** [РЕАЛИЗОВАНО]
+  - Пользовательский интерфейс в `SettingsView.vue` для редактирования всех параметров `StrategyParameters` (DLC, NWE, Clusters, Risk Management, Global) завершен.
+  - Настройки сохраняются и загружаются через API `/settings`.
+- **Статус Бэкенд:** [РЕАЛИЗОВАНО] (Как указано в основном плане `promt.md`)
+  - Реализованы `SettingsService` и `SettingsController` для сохранения и получения настроек из БД (сущность `Setting`).
+
 **Общее описание из `promt.md`:**
 - Модуль `backtester`: Функция `runBacktest`.
 - Загрузка свечей (пока параметр, в будущем из БД).
@@ -19,38 +26,38 @@
 ### B. Имитация Торговли (Основная логика в цикле по свечам)
 
 #### B.1. Расчет Размера Позиции
-- **Статус:** [В ПРОЦЕССЕ]
+- **Статус:** [РЕАЛИЗОВАНО]
 - **План:**
   - [x] Извлечь `RiskManagementSettings` из `params.strategyParameters`.
-  - [ ] Реализовать вспомогательную функцию `calculatePositionSize(capital: number, entryPrice: number, riskSettings: RiskManagementSettings, currentCandle: StrategyCandle): number`.
-    - [x] **Вариант 1 (Простой):** Если `riskSettings.positionSizePercentage` задан, расчет `% от капитала`: `(capital * percentage) / entryPrice`.
-    - [ ] **Вариант 2 (На основе риска ATR):** Если заданы `stopLossMultiplier` и `atrPeriod` (в `riskSettings` или глобально), и `currentCandle.atr` доступен: 
-        - `risk_per_contract_currency = currentCandle.atr * riskSettings.stopLossMultiplier`.
-        - `max_contracts = (capital * (riskSettings.maxRiskPerTradePercentage ?? 0.01)) / risk_per_contract_currency` (где `maxRiskPerTradePercentage` - параметр в `RiskManagementSettings`, например, 1% = 0.01).
-        - Учесть минимальный размер контракта и доступный капитал.
-    - [ ] **Начальная реализация:** Можно начать с Варианта 1 или даже временно оставить фиксированный размер `1` с `TODO`.
-  - [ ] Использовать `calculatePositionSize` при открытии сделки. (Интегрировано в проверку условий входа, полное использование будет при реализации B.3)
+  - [x] Реализована вспомогательная функция `calculatePositionSize(capital: number, entryPrice: number, currentCandle: StrategyCandle, riskSettings: RiskManagementSettings): number`.
+    - [x] **Вариант 2 (На основе риска ATR):** Реализован как приоритетный. Если заданы `riskSettings.maxRiskPerTradePercentage`, `riskSettings.stopLossMultiplier`, и `currentCandle.atr` доступен:
+        - `riskPerTradeCapital = capital * riskSettings.maxRiskPerTradePercentage`.
+        - `atrBasedStopLossAmountPerUnit = currentCandle.atr * riskSettings.stopLossMultiplier`.
+        - `size = riskPerTradeCapital / atrBasedStopLossAmountPerUnit`.
+    - [x] **Вариант 1 (Простой):** Используется, если Вариант 2 не применим. Если `riskSettings.positionSizePercentage` задан, расчет `% от капитала`: `(capital * percentage) / entryPrice`.
+    - [x] Возвращается `1` или `0` в случае некорректных данных или если размер не может быть рассчитан.
+  - [x] `calculatePositionSize` используется при открытии сделки.
 
 #### B.2. Обработка Активной Сделки (Выходы)
-- **Статус:** [НЕ НАЧАТО] Сейчас: Заглушка `if (activeTrade) { ... }`.
+- **Статус:** [РЕАЛИЗОВАНО (SL/TP)]
 - **План:**
-  - [ ] Проверить, есть ли `activeTrade.stopLoss` и `activeTrade.takeProfit`.
-  - [ ] **Выход по Stop Loss:**
-    - [ ] Для Long: Если `currentCandle.low <= activeTrade.stopLoss`.
-    - [ ] Для Short: Если `currentCandle.high >= activeTrade.stopLoss`.
-    - [ ] Если условие выполнено:
-      - [ ] `activeTrade.exitPrice = activeTrade.stopLoss`.
-      - [ ] `activeTrade.exitTimestamp = currentCandle.timestamp`.
-      - [ ] `activeTrade.exitReason = 'SL'`.
-      - [ ] Рассчитать PnL для сделки (см. B.6).
-      - [ ] Обновить `currentCapital` (см. B.6).
-      - [ ] Добавить `activeTrade` в массив `trades`.
-      - [ ] `activeTrade = null`.
-  - [ ] **Выход по Take Profit:**
-    - [ ] Для Long: Если `currentCandle.high >= activeTrade.takeProfit`.
-    - [ ] Для Short: Если `currentCandle.low <= activeTrade.takeProfit`.
-    - [ ] Если условие выполнено (аналогично SL, но `exitPrice = activeTrade.takeProfit`, `exitReason = 'TP'`).
-  - [ ] **Выход по Trailing Stop:** [ОТЛОЖЕНО] 
+  - [x] Проверить, есть ли `activeTrade.stopLoss` и `activeTrade.takeProfit`.
+  - [x] **Выход по Stop Loss:**
+    - [x] Для Long: Если `currentCandle.low <= activeTrade.stopLoss`.
+    - [x] Для Short: Если `currentCandle.high >= activeTrade.stopLoss`.
+    - [x] Если условие выполнено:
+      - [x] `activeTrade.exitPrice = activeTrade.stopLoss`.
+      - [x] `activeTrade.exitTimestamp = currentCandle.timestamp`.
+      - [x] `activeTrade.exitReason = 'SL'`.
+      - [x] Рассчитать PnL для сделки.
+      - [x] Обновить `currentCapital`.
+      - [x] Добавить `activeTrade` в массив `trades`.
+      - [x] `activeTrade = null`.
+  - [x] **Выход по Take Profit:**
+    - [x] Для Long: Если `currentCandle.high >= activeTrade.takeProfit`.
+    - [x] Для Short: Если `currentCandle.low <= activeTrade.takeProfit`.
+    - [x] Если условие выполнено (аналогично SL, но `exitPrice = activeTrade.takeProfit`, `exitReason = 'TP'`, PnL, капитал, добавление в trades, `activeTrade = null`).
+  - [ ] **Выход по Trailing Stop:** [ОТЛОЖЕНО]
   - [ ] **Выход по Противоположному Сигналу:** [ОТЛОЖЕНО]
 
 #### B.3. Проверка Условий Входа (Открытие Новых Сделок)
@@ -68,4 +75,40 @@
 - **План:** Потребуется отслеживать количество сделок за текущий "день" бэктеста. 
 
 #### B.5. Обновление Equity и Расчет Max Drawdown
-- **Статус:** [НЕ НАЧАТО] Сейчас: `currentCapital` не обновляется, `maxDrawdown`
+- **Статус:** [В ПРОЦЕССЕ] (Базовый расчет после закрытия сделки добавлен)
+- **План:**
+  - [x] `peakCapital` обновляется после каждой закрытой сделки.
+  - [x] `maxDrawdown` рассчитывается и обновляется после каждой закрытой сделки.
+  - [ ] Рассмотреть необходимость обновления equity (mark-to-market) на каждой свече, а не только при закрытии сделки для более точного `maxDrawdown` (особенно для длительных сделок).
+
+#### B.6. Расчет PnL для Сделки и Обновление Капитала (Объединен с B.2)
+- **Статус:** [РЕАЛИЗОВАНО] (Как часть логики закрытия сделок в B.2)
+
+### C. Расчет Базовых Метрик
+- **Статус:** [РЕАЛИЗОВАНО]
+- **План:**
+  - [x] `totalPnl` (агрегируется из сделок)
+  - [x] `totalTrades` (длина массива `trades`)
+  - [x] `winningTrades` (фильтрация `trades`)
+  - [x] `losingTrades` (фильтрация `trades`)
+  - [x] `winRate` (рассчитывается)
+  - [x] `grossProfit` (рассчитывается из положительных `trade.pnl`)
+  - [x] `grossLoss` (рассчитывается из отрицательных `trade.pnl`)
+  - [x] `averageTradePnl = totalPnl / totalTrades` (рассчитывается)
+  - [x] `profitFactor = grossProfit / Math.abs(grossLoss)` (рассчитывается, с обработкой `grossLoss = 0`)
+  - [x] `maxDrawdown` (рассчитывается в цикле сделок и присваивается метрикам)
+  - [x] `equityCurve` (массив `{ timestamp, capital }` формируется после каждой сделки)
+  - [x] `avgWinningTrade = grossProfit / winningTrades` (рассчитывается)
+  - [x] `avgLosingTrade = grossLoss / losingTrades` (рассчитывается, с обработкой `losingTradesCount = 0`)
+  - [x] `expectancy = (Win Rate * Avg Win) - (Loss Rate * Avg Loss)` (рассчитывается, с использованием десятичных Win/Loss Rate и `Math.abs(avgLosingTrade)`)
+
+### D. Возврат `metrics` и `trades_list`
+- **Статус:** [РЕАЛИЗОВАНО]
+- **План:**
+  - [x] Возврат `metrics` и `trades_list` после завершения бэктеста.
+
+### E. (Будущее) Очередь Задач (BullMQ) и API
+- **Статус:** [ОТЛОЖЕНО]
+- **План:**
+  - [ ] Реализация очереди задач (BullMQ) для планирования и распределения бэктестов.
+  - [ ] Разработка API для взаимодействия с внешними системами и пользователями.

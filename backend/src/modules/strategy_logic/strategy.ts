@@ -58,6 +58,46 @@ export interface StrategyParameters {
   avgVolumePeriod?: number; // Период для AvgVolume
 }
 
+// Добавляем экспорт настроек по умолчанию
+export const DefaultStrategyParameters: StrategyParameters = {
+  dlc: {
+    period: undefined, // Например, можно не устанавливать по умолчанию или задать конкретное значение, если оно всегда нужно
+    numProfiles: 1,
+    pocColor: '#FF0000',
+    vahColor: '#00FF00',
+    valColor: '#0000FF',
+    numBins: 20,
+    vaPercentage: 0.7,
+  },
+  nwe: {
+    lookbackPeriod: 20,
+    atrPeriod: 10, // Может наследоваться от globalAtrPeriod или risk.atrPeriod
+    atrMultiplier: 2,
+    upColor: '#00FFFF',
+    downColor: '#FFFF00',
+  },
+  clusters: {
+    source: 'volume',
+    thresholdMultiplier: 2,
+    lookbackPeriod: 20, // Для среднего объема
+    confirmationBars: 0, // Пока не используется активно
+    buyColor: '#00FF00',
+    sellColor: '#FF0000',
+  },
+  risk: {
+    atrPeriod: 14,
+    stopLossMultiplier: 1.5,
+    takeProfitMultiplier: 3,
+    useTrailingStop: false,
+    trailingStopOffsetMultiplier: 1,
+    maxTradesPerDay: 0, // 0 - без ограничений
+    positionSizePercentage: 0.01, // 1% от капитала, если ATR метод не сработает
+    maxRiskPerTradePercentage: 0.01, // 1% риска на сделку
+  },
+  globalAtrPeriod: 14,
+  avgVolumePeriod: 20,
+};
+
 export interface StrategyCandle extends CandleData {
   atr?: number;
   nweUpper?: number | null;
