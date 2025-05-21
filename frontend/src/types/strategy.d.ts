@@ -43,4 +43,7 @@ export interface StrategyParameters {
   risk: RiskManagementSettings;
   globalAtrPeriod?: number;
   avgVolumePeriod?: number;
+  tradingPair?: string;
+  timeframe?: string;
+  initialCapital?: number;
 } 

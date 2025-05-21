@@ -1,11 +1,15 @@
-import { StrategyParameters, StrategyCandle } from '../strategy_logic/strategy';
+import { StrategyParameters as ImportedStrategyParameters, StrategyCandle as ImportedStrategyCandle } from '../strategy_logic/strategy';
+
+// Re-exporting for wider use within the module and by other modules like config
+export type StrategyParameters = ImportedStrategyParameters;
+export type StrategyCandle = ImportedStrategyCandle;
 
 // Параметры для запуска одного бэктеста
 export interface BacktestRunParameters {
   pairSymbol: string;
   timeframe: string; // Например, '15m', '1h', '1d'
-  startDate: Date; // Или string, если будем парсить
-  endDate: Date;   // Или string
+  startDate: string; // ISO string date
+  endDate: string;   // ISO string date
   initialCapital: number;
   strategyParameters: StrategyParameters;
 }
@@ -31,33 +35,49 @@ export interface Trade {
   entryReason?: string;
   exitReason?: string; // Например, 'SL', 'TP', 'Market Close', 'Signal Reversed'
   fees?: number;
+  // Optional fields from backend calculation if available from frontend definition
+  commission?: number;
+  slippage?: number;
+  duration?: number; // in milliseconds or seconds
+  profitPercentage?: number; // This was pnlPercentage, ensure consistency
+  riskRewardRatio?: number;
 }
 
 // Основные метрики по результатам бэктеста
 export interface BacktestMetrics {
   totalPnl: number;
-  totalPnlPercentage: number;
+  totalPnlPercentage: number; // This could be derived or directly stored
   totalTrades: number;
   winningTrades: number;
   losingTrades: number;
   winRate: number; // winningTrades / totalTrades
-  maxDrawdown?: number; // Максимальная просадка в %
-  profitFactor?: number; // Gross Profit / Gross Loss
+  maxDrawdown: number; // Максимальная просадка в %, ensure consistency (0.1 or 10)
+  profitFactor: number; // Gross Profit / Gross Loss
   avgTradePnl?: number;
   avgWinningTrade?: number;
   avgLosingTrade?: number;
-  sharpeRatio?: number; // (Пока можно опустить, требует Risk-Free Rate)
-  sortinoRatio?: number; // (Пока можно опустить)
-  expectancy?: number; // (Win Rate (0-1) * Avg Win) - (Loss Rate (0-1) * Avg Loss)
+  sharpeRatio?: number; 
+  sortinoRatio?: number; 
+  expectancy?: number; 
   durationMs?: number; // Время выполнения бэктеста
   equityCurve?: Array<{ timestamp: number; capital: number }>; // Динамика капитала
+  // Added from frontend type definition for consistency
+  grossProfit?: number;
+  grossLoss?: number;
+  initialCapital?: number; // Added, as it's part of metrics in frontend type
+  finalCapital?: number;   // Added
+  [key: string]: any; 
 }
 
 // Полный результат одного бэктеста
 export interface BacktestResult {
-  parameters: BacktestRunParameters;
+  jobId?: string; 
+  status?: 'queued' | 'running' | 'completed' | 'failed';
+  message?: string; 
   metrics: BacktestMetrics;
   trades: Trade[];
+  logs?: string[]; 
+  configUsed?: BacktestRunParameters; 
   // Опционально можно возвращать свечи с индикаторами для отладки/графиков
   strategyCandles?: StrategyCandle[]; 
 } 

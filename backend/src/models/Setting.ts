@@ -1,15 +1,30 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
-import { StrategyParameters } from '../modules/strategy_logic/strategy'; // Путь может потребовать корректировки
+// import { StrategyParameters } from '../modules/strategy_logic/strategy'; // Удаляем этот импорт
+
+// Определяем интерфейс для подключения к бирже
+export interface ExchangeConnection {
+  id: string; // uuid, будет генерироваться на клиенте или при создании
+  name: string; // Пользовательское имя для подключения, например "My Main OKX"
+  exchange: string; // Название биржи, например, 'OKX'
+  apiKey: string;
+  secretKey: string;
+  passphrase?: string; // Для OKX
+  isActive: boolean; // Является ли это подключение активным для использования
+  isTestNet: boolean; // Используется ли тестовая сеть
+}
 
 @Entity('settings')
 export class Setting {
   @PrimaryGeneratedColumn()
   id!: number;
 
-  // Мы будем хранить все параметры стратегии как один JSON объект.
-  // Это упрощает добавление новых параметров без изменения схемы таблицы.
-  @Column('jsonb') // jsonb для PostgreSQL, для других БД может быть 'json'
-  strategyParameters!: StrategyParameters;
+  // Удаляем strategyParameters
+  // @Column('jsonb') 
+  // strategyParameters!: StrategyParameters;
+
+  // Добавляем поле для хранения конфигураций подключений к биржам
+  @Column('jsonb', { default: [] }) // Массив объектов ExchangeConnection
+  exchangeConnections!: ExchangeConnection[];
 
   // Можно добавить другие глобальные настройки приложения сюда
   // @Column({ type: 'varchar', nullable: true })

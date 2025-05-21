@@ -11,7 +11,7 @@ import {
   calculateApproxDelta,
 } from './indicators';
 
-interface DLCSettings {
+export interface DLCSettings {
   period?: number; // Период для расчета Volume Profile (например, дневной)
   numProfiles?: number; // Количество профилей для отображения/расчета (например, 1 для текущего, 2 для текущего и предыдущего)
   pocColor?: string;
@@ -21,7 +21,7 @@ interface DLCSettings {
   vaPercentage?: number;
 }
 
-interface NWESettings {
+export interface NWESettings {
   lookbackPeriod?: number; // Период для поиска экстремумов NWE (уже было nweLookback)
   atrPeriod?: number; // Период ATR для определения силы волны NWE
   atrMultiplier?: number; // Множитель ATR для порога NWE
@@ -29,7 +29,7 @@ interface NWESettings {
   downColor?: string;
 }
 
-interface ClusterSettings {
+export interface ClusterSettings {
   source?: 'delta' | 'volume'; // Источник для кластеров (дельты или объема)
   thresholdMultiplier?: number; // Множитель для определения значительного кластера (например, от среднего объема/дельты)
   lookbackPeriod?: number; // Период для расчета базового значения (среднего объема/дельты)

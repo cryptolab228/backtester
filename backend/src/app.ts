@@ -18,6 +18,7 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 // import '@/jobs/dataWorker'; 
 import dataRoutes from '@/modules/data/dataRoutes'; // Импорт роутов данных
 import settingsRoutes from '@/modules/settings/settingsRoutes'; // <-- Импорт роутов настроек
+import backtesterRoutes from '@/modules/backtester/backtester.routes'; // <-- Импорт роутов бэктестера
 import DataController from '@/modules/data/dataController'; // <--- Явный импорт DataController
 
 async function startServer() {
@@ -66,6 +67,9 @@ async function startServer() {
 
     // Подключаем роуты модуля настроек
     app.use('/api/settings', settingsRoutes); // <-- Подключение роутов настроек
+
+    // Подключаем роуты модуля бэктестера
+    app.use('/api/backtest', backtesterRoutes); // <-- Подключение роутов бэктестера
 
     // Здесь позже добавим роутеры для бектеста и сканера
 

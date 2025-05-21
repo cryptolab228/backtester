@@ -11,10 +11,31 @@ export const apiClient = axios.create({
   },
 });
 
+// Тип для промиса с возможностью отмены
+export interface AbortablePromise<T> {
+  promise: Promise<T>;
+  abort: () => void;
+}
+
+// Обертка для POST запросов с возможностью отмены
+export function postWithAbort<T>(url: string, data?: any, signal?: AbortSignal): AbortablePromise<T> {
+  const controller = new AbortController();
+  const abortSignal = signal || controller.signal;
+
+  const promise = apiClient.post<T>(url, data, { signal: abortSignal });
+
+  return {
+    promise: promise.then(response => response.data), // Возвращаем только данные, как и ожидает backtestStore
+    abort: () => controller.abort(),
+  };
+}
+
 // Если типы еще не вынесены, оставляем их здесь или определяем новые
 export interface TradingPair {
   id: string; // или number, в зависимости от вашей модели
   symbol: string;
+  exchange?: string; // Добавлено свойство для биржи
+  isSpot?: boolean;  // Добавлено свойство для определения спотовый/фьючерсный
   // другие поля, если есть, например, baseAsset, quoteAsset, etc.
 }
 
@@ -201,4 +222,21 @@ export const resumeJob = async (jobId: string): Promise<{ message: string }> => 
 export const getJobCounts = async (): Promise<JobCounts> => {
   const response = await apiClient.get('/data/queue/job-counts');
   return response.data;
+};
+
+// Новый метод для получения торговых пар
+export const getTradingPairs = async (): Promise<Array<{ id: number; symbol: string }>> => {
+  try {
+    const response = await apiClient.get<Array<{ id: number; symbol: string }>>('/data/trading-pairs');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching trading pairs:', error);
+    // В случае ошибки можно вернуть пустой массив или пробросить ошибку дальше
+    return [];
+  }
+};
+
+export default {
+  getQueueJobCounts,
+  getTradingPairs,
 }; 
