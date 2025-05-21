@@ -117,8 +117,8 @@
                   <h3 class="text-lg font-medium text-gray-900 mb-3">Основные Метрики:</h3>
                   <ul class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-2 text-sm">
                     <li v-for="(value, key) in backtestResultsStore.metrics" :key="key" class="flex justify-between py-1 border-b border-gray-200">
-                      <span class="font-medium text-gray-600">{{ key }}:</span>
-                      <span class="text-gray-800">{{ formatMetric(value) }}</span>
+                      <span class="font-medium text-gray-600">{{ getDisplayKey(key) }}:</span>
+                      <span class="text-gray-800">{{ formatMetric(key, value) }}</span>
                     </li>
                   </ul>
                 </div>
@@ -127,9 +127,72 @@
                 </p>
               </TabPanel>
               <TabPanel header="Список сделок">
-                <div v-if="backtestResultsStore?.trades && backtestResultsStore.trades.length > 0" class="p-4 bg-white rounded-md shadow overflow-x-auto">
-                  <h3 class="text-lg font-medium text-gray-900 mb-3">Совершенные сделки:</h3>
-                  <pre class="text-xs bg-gray-100 p-3 rounded-md">{{ JSON.stringify(backtestResultsStore.trades, null, 2) }}</pre>
+                <div v-if="backtestResultsStore?.trades && backtestResultsStore.trades.length > 0" class="p-0 bg-white rounded-md shadow overflow-x-auto">
+                  <DataTable :value="backtestResultsStore.trades" stripedRows responsiveLayout="scroll" paginator :rows="10" :rowsPerPageOptions="[10, 20, 50]" currentPageReportTemplate="Показано с {first} по {last} из {totalRecords} сделок" sortMode="multiple">
+                    <Column field="id" header="ID" :sortable="true" style="min-width: 100px; font-size: 0.8rem; padding: 0.5rem;">
+                      <template #body="slotProps">
+                        <span :title="slotProps.data.id">{{ slotProps.data.id.substring(0, 8) }}...</span>
+                      </template>
+                    </Column>
+                    <Column field="pair" header="Пара" :sortable="true" style="min-width: 120px; font-size: 0.8rem; padding: 0.5rem;"></Column>
+                    <Column field="direction" header="Направление" :sortable="true" style="min-width: 100px; font-size: 0.8rem; padding: 0.5rem;">
+                      <template #body="slotProps">
+                        <span :class="{'text-green-600 font-semibold': slotProps.data.direction === 'long', 'text-red-600 font-semibold': slotProps.data.direction === 'short'}">
+                          {{ slotProps.data.direction === 'long' ? 'Long' : 'Short' }}
+                        </span>
+                      </template>
+                    </Column>
+                    <Column field="entryTimestamp" header="Время Входа" :sortable="true" style="min-width: 160px; font-size: 0.8rem; padding: 0.5rem;">
+                      <template #body="slotProps">
+                        {{ new Date(slotProps.data.entryTimestamp).toLocaleString() }}
+                      </template>
+                    </Column>
+                    <Column field="entryPrice" header="Цена Входа" :sortable="true" style="min-width: 100px; font-size: 0.8rem; padding: 0.5rem;">
+                      <template #body="slotProps">
+                        {{ slotProps.data.entryPrice?.toFixed(4) }}
+                      </template>
+                    </Column>
+                    <Column field="size" header="Размер (контр.)" :sortable="true" style="min-width: 120px; font-size: 0.8rem; padding: 0.5rem;">
+                        <template #body="slotProps">
+                            {{ slotProps.data.size?.toFixed(4) }}
+                        </template>
+                    </Column>
+                    <Column field="exitTimestamp" header="Время Выхода" :sortable="true" style="min-width: 160px; font-size: 0.8rem; padding: 0.5rem;">
+                      <template #body="slotProps">
+                        {{ slotProps.data.exitTimestamp ? new Date(slotProps.data.exitTimestamp).toLocaleString() : '-' }}
+                      </template>
+                    </Column>
+                    <Column field="exitPrice" header="Цена Выхода" :sortable="true" style="min-width: 100px; font-size: 0.8rem; padding: 0.5rem;">
+                      <template #body="slotProps">
+                        {{ slotProps.data.exitPrice?.toFixed(4) }}
+                      </template>
+                    </Column>
+                     <Column field="exitReason" header="Причина Выхода" :sortable="true" style="min-width: 120px; font-size: 0.8rem; padding: 0.5rem;"></Column>
+                    <Column field="pnl" header="PnL ($)" :sortable="true" style="min-width: 100px; font-size: 0.8rem; padding: 0.5rem;">
+                      <template #body="slotProps">
+                        <span :class="{'text-green-600': slotProps.data.pnl > 0, 'text-red-600': slotProps.data.pnl < 0}">
+                          {{ slotProps.data.pnl?.toFixed(2) }}
+                        </span>
+                      </template>
+                    </Column>
+                    <Column field="pnlPercentage" header="PnL (%)" :sortable="true" style="min-width: 100px; font-size: 0.8rem; padding: 0.5rem;">
+                        <template #body="slotProps">
+                             <span :class="{'text-green-600': slotProps.data.pnlPercentage > 0, 'text-red-600': slotProps.data.pnlPercentage < 0}">
+                                {{ slotProps.data.pnlPercentage ? (slotProps.data.pnlPercentage * 100).toFixed(2) + '%' : '-'}}
+                            </span>
+                        </template>
+                    </Column>
+                    <Column field="stopLoss" header="SL" style="min-width: 90px; font-size: 0.8rem; padding: 0.5rem;">
+                        <template #body="slotProps">
+                            {{ slotProps.data.stopLoss?.toFixed(4) }}
+                        </template>
+                    </Column>
+                    <Column field="takeProfit" header="TP" style="min-width: 90px; font-size: 0.8rem; padding: 0.5rem;">
+                        <template #body="slotProps">
+                            {{ slotProps.data.takeProfit?.toFixed(4) }}
+                        </template>
+                    </Column>
+                  </DataTable>
                 </div>
                 <p v-else class="m-0 p-4 text-gray-600 bg-gray-50 rounded-md">
                   Список сделок будет доступен здесь после выполнения бектеста.
@@ -171,6 +234,8 @@ import Dropdown from 'primevue/dropdown';
 import Calendar from 'primevue/calendar';
 import InputNumber from 'primevue/inputnumber';
 import Message from 'primevue/message';
+import DataTable from 'primevue/datatable';
+import Column from 'primevue/column';
 
 const settingsStore = useSettingsStore();
 const backtestStore = useBacktestStore();
@@ -278,19 +343,87 @@ const toggleResultsPanel = (event: any) => {
   console.log('Results Panel toggled', event);
 };
 
-const formatMetric = (value: any): string => {
+// Словарик для отображаемых названий ключей метрик
+const displayMetricKeys: Record<string, string> = {
+  totalPnl: 'Total PnL',
+  totalPnlPercentage: 'Total PnL %',
+  totalTrades: 'Total Trades',
+  winningTrades: 'Winning Trades',
+  losingTrades: 'Losing Trades',
+  winRate: 'Win Rate %',
+  maxDrawdown: 'Max Drawdown %',
+  profitFactor: 'Profit Factor',
+  initialCapital: 'Initial Capital',
+  finalCapital: 'Final Capital',
+  grossProfit: 'Gross Profit',
+  grossLoss: 'Gross Loss',
+  averageTradePnl: 'Average Trade PnL',
+  avgWinningTrade: 'Avg Winning Trade',
+  avgLosingTrade: 'Avg Losing Trade',
+  expectancy: 'Expectancy',
+  sharpeRatio: 'Sharpe Ratio',
+  sortinoRatio: 'Sortino Ratio',
+  cagr: 'CAGR %',
+  volatility: 'Volatility %',
+  equityCurve: 'Equity Curve',
+  durationMs: 'Duration (ms)',
+};
+
+const getDisplayKey = (key: string | number) => {
+  return displayMetricKeys[key.toString()] || key.toString();
+};
+
+const formatMetric = (key: string | number, value: any): string => {
+  const sKey = key.toString();
+
+  if (typeof value === 'string' && value.includes('%')) {
+    // Если значение уже строка с процентом, просто возвращаем
+    return value;
+  }
+
   if (typeof value === 'number') {
-    if ((value > -1 && value < 1 && value !== 0) || String(value).includes('.')) {
-      if (String(value).length - String(value).indexOf('.') -1 > 2 ) {
-         return (value * 100).toFixed(2) + '%';
-      }
+    // Ключи, значения которых являются процентами и должны отображаться со знаком %
+    const percentageKeys = [
+      'totalPnlPercentage', 
+      'winRate', 
+      'maxDrawdown',
+      // Добавьте сюда другие ключи, если бэкенд их возвращает как числа, но они являются процентами
+      // например, 'cagr', 'volatility', 'avgWinningTradePercentage', 'avgLosingTradePercentage', 'expectancyPercentage'
+    ];
+
+    // Ключи, значения которых являются денежными (или требуют 2 знака после запятой)
+    const currencyLikeKeys = [
+      'totalPnl',
+      'initialCapital',
+      'finalCapital',
+      'grossProfit',
+      'grossLoss',
+      'averageTradePnl',
+      'avgWinningTrade',
+      'avgLosingTrade',
+      'expectancy' // Матожидание тоже часто с 2 знаками
+    ];
+
+    if (sKey === 'winRate') { // Специальная обработка для winRate
+      return `${(value * 100).toFixed(2)}%`;
+    } else if (percentageKeys.includes(sKey)) {
+      return `${value.toFixed(2)}%`;
     }
-    return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (currencyLikeKeys.includes(sKey)) {
+      return value.toFixed(2);
+    }
+    // Для остальных чисел (например, totalTrades, durationMs, profitFactor)
+    if (Number.isInteger(value)) {
+        return value.toString();
+    }
+    return value.toFixed(2); // profitFactor, например
   }
-  if (value instanceof Date) {
-    return value.toLocaleString();
+
+  if (Array.isArray(value)) {
+    return '[Equity Data]'; // Заглушка для массива (например, equityCurve)
   }
-  return String(value);
+  
+  return String(value); // Для всего остального
 };
 
 watch(startDate, (newVal) => {

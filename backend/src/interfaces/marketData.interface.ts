@@ -5,6 +5,7 @@ export interface CandleData {
   low: number;
   close: number;
   volume: number;
+  volumeQuote?: number; // Объем в котируемой валюте
   pair_id?: number; // Optional: if you link candles to a pair ID in your DB
   timeframe?: string; // Optional: e.g., '15m', '1h', '4h', '1d'
   // Add any other fields that come from your data source

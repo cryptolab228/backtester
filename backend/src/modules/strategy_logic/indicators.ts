@@ -1,12 +1,14 @@
 // Файл для функций расчета технических индикаторов (ATR, Volume Profile, NWE и т.д.)
 
+import logger from '../../utils/logger'; // Убедимся, что логгер импортирован
+
 export interface CandleData {
   high: number;
   low: number;
   close: number;
   volume: number; // Сделаем volume обязательным для VP и других индикаторов, где он нужен
-  open?: number; // open не используется в ATR, но может быть в объекте свечи
-  timestamp?: number; // timestamp не используется в ATR
+  open: number; // <--- СДЕЛАНО ОБЯЗАТЕЛЬНЫМ
+  timestamp: number; // <--- СДЕЛАНО ОБЯЗАТЕЛЬНЫМ
   // ... могут быть и другие поля
 }
 
@@ -67,6 +69,7 @@ export const calculateVolumeProfile = (
   numBins: number = 20, // Количество ценовых уровней (корзин) в профиле
   vaPercentage: number = 0.7 // Процент для расчета Value Area (области стоимости)
 ): VolumeProfileResult => {
+  logger.debug(`[CalcVP] Called with ${candles?.length} candles, numBins: ${numBins}, vaPercentage: ${vaPercentage}`);
   const result: VolumeProfileResult = {
     poc: null,
     vah: null,
@@ -76,6 +79,7 @@ export const calculateVolumeProfile = (
   };
 
   if (!candles || candles.length === 0) {
+    logger.warn('[CalcVP] No candles provided or empty array.');
     return result;
   }
 
@@ -89,97 +93,157 @@ export const calculateVolumeProfile = (
     totalVolumeFromCandles += candle.volume;
   }
   result.totalVolume = totalVolumeFromCandles;
+  logger.debug(`[CalcVP] minOverallLow: ${minOverallLow}, maxOverallHigh: ${maxOverallHigh}, totalVolumeFromCandles: ${totalVolumeFromCandles}`);
 
-  if (result.totalVolume === 0) return result; // Если общий объем 0, профиль не построить
-  if (minOverallLow === maxOverallHigh) { // Если все цены одинаковы
+  // Новое логирование для аномальных срезов
+  if (typeof minOverallLow === 'number' && typeof maxOverallHigh === 'number' && minOverallLow > maxOverallHigh) {
+    logger.error(`[CalcVP] ANOMALY DETECTED: minOverallLow (${minOverallLow}) > maxOverallHigh (${maxOverallHigh}). This will result in a negative binSize.`);
+    logger.error(`[CalcVP] Dumping candles from the problematic slice (length: ${candles.length}):`);
+    // Логируем первые 3 и последние 3 свечи из проблемного среза для анализа
+    const logLimit = 3;
+    if (candles.length <= logLimit * 2) {
+      candles.forEach((candle, idx) => {
+        logger.error(`[CalcVP-SliceCandle-${idx}] ${JSON.stringify(candle)}`);
+      });
+    } else {
+      for (let k = 0; k < logLimit; k++) {
+        logger.error(`[CalcVP-SliceCandle-start-${k}] ${JSON.stringify(candles[k])}`);
+      }
+      logger.error(`[CalcVP-SliceCandle] ... middle candles omitted ...`);
+      for (let k = candles.length - logLimit; k < candles.length; k++) {
+        logger.error(`[CalcVP-SliceCandle-end-${k}] ${JSON.stringify(candles[k])}`);
+      }
+    }
+  }
+
+  if (result.totalVolume === 0) {
+    logger.warn('[CalcVP] Total volume from candles is 0. Returning empty profile.');
+    return result;
+  }
+  if (minOverallLow === maxOverallHigh) { 
+    logger.info('[CalcVP] All candle prices are identical (minLow === maxHigh).');
     result.poc = minOverallLow;
     result.vah = minOverallLow;
     result.val = minOverallLow;
     result.profile.push({ price: minOverallLow, volume: result.totalVolume });
+    logger.debug('[CalcVP] Profile for identical prices:', result);
     return result;
   }
 
   const binSize = (maxOverallHigh - minOverallLow) / numBins;
+  logger.debug(`[CalcVP] Calculated binSize: ${binSize}`);
+  if (binSize <= 0) {
+    logger.error(`[CalcVP] binSize is ${binSize}. This should not happen if minOverallLow !== maxOverallHigh. Defaulting to failsafe.`);
+    // Failsafe, though the previous check minOverallLow === maxOverallHigh should catch this.
+    // If it still happens, it implies an issue with price data (e.g. NaN or Infinity)
+    // For now, return current result which will be empty/null POC.
+    return result;
+  }
+  
   const bins: { price: number; volume: number; midPrice: number }[] = [];
 
   for (let i = 0; i < numBins; i++) {
     const binStartPrice = minOverallLow + i * binSize;
     bins.push({
-      price: binStartPrice, // Используем начало корзины как ее представление цену для простоты группировки
-      midPrice: binStartPrice + binSize / 2, // Средняя цена корзины для отображения
+      price: binStartPrice, 
+      midPrice: binStartPrice + binSize / 2, 
       volume: 0,
     });
   }
-  // Последняя корзина должна доходить до maxOverallHigh
-  if (bins.length > 0 && binSize > 0) {
-      bins[bins.length -1].midPrice = Math.min(bins[bins.length-1].midPrice, maxOverallHigh); 
-      // Корректируем последнюю цену, чтобы она не превышала maxOverallHigh если binStart + binSize/2 выходит за рамки.
-      // Цена самой корзины (bins[bins.length-1].price) должна корректно покрывать maxOverallHigh
+  
+  if (bins.length > 0) {
+    logger.debug(`[CalcVP] First bin: price=${bins[0].price.toFixed(4)}, midPrice=${bins[0].midPrice.toFixed(4)}. Last bin: price=${bins[bins.length-1].price.toFixed(4)}, midPrice=${bins[bins.length-1].midPrice.toFixed(4)}`);
   }
 
 
-  for (const candle of candles) {
+  for (let i = 0; i < candles.length; i++) {
+    const candle = candles[i];
     const candleTypicalPrice = (candle.high + candle.low + candle.close) / 3;
-    let targetBinIndex = 0;
-    if (binSize > 0) { // Избегаем деления на ноль если все цены одинаковы
-        targetBinIndex = Math.floor((candleTypicalPrice - minOverallLow) / binSize);
-    } else { // Если binSize = 0, значит все цены в одной точке minOverallLow
-        targetBinIndex = 0;
-    }
+    let targetBinIndex = Math.floor((candleTypicalPrice - minOverallLow) / binSize);
 
     if (targetBinIndex >= numBins) targetBinIndex = numBins - 1; 
     if (targetBinIndex < 0) targetBinIndex = 0; 
     
     if (bins[targetBinIndex]) {
         bins[targetBinIndex].volume += candle.volume;
+        // Log for a few candles to see distribution
+        if (i < 3 || i > candles.length - 4) {
+            logger.debug(`[CalcVP-DistCandle-${i}] TypicalPrice: ${candleTypicalPrice.toFixed(4)}, Volume: ${candle.volume}, TargetBinIndex: ${targetBinIndex}, BinMidPrice: ${bins[targetBinIndex].midPrice.toFixed(4)}, BinVolumeAfter: ${bins[targetBinIndex].volume}`);
+        }
+    } else {
+        logger.warn(`[CalcVP-DistCandle-${i}] No target bin for index ${targetBinIndex}! TypicalPrice: ${candleTypicalPrice.toFixed(4)}`);
     }
+  }
+  
+  // Log total volume in bins
+  const totalVolumeInBins = bins.reduce((acc, b) => acc + b.volume, 0);
+  logger.debug(`[CalcVP] Total volume from candles: ${totalVolumeFromCandles}. Total volume distributed in bins: ${totalVolumeInBins}`);
+  if (Math.abs(totalVolumeFromCandles - totalVolumeInBins) > 1e-6) { // Check for significant discrepancy
+      logger.warn(`[CalcVP] Discrepancy between total candle volume and total volume in bins!`);
   }
 
   result.profile = bins.map(b => ({ price: b.midPrice, volume: b.volume })).filter(b => b.volume > 0);
+  logger.debug(`[CalcVP] Profile after mapping and filtering zero volume bins. Profile length: ${result.profile.length}`);
+  
   if (result.profile.length === 0 && result.totalVolume > 0 && minOverallLow === maxOverallHigh) {
-      // Если весь объем был на одной цене, но из-за биннинга не попал в профиль (маловероятно с текущей логикой, но предосторожность)
+      logger.info('[CalcVP] Readjusting profile for single price point (already handled, but as a fallback log).');
       result.profile.push({ price: minOverallLow, volume: result.totalVolume });
   } else if (result.profile.length === 0) {
+      logger.warn('[CalcVP] Profile is empty after filtering. No POC can be calculated. Returning.');
       return result; 
   }
   
   let maxVolume = 0;
-  result.poc = result.profile[0].price; // Инициализация POC первой точкой профиля
+  // Initialize POC with the price of the first point in the filtered profile, if profile is not empty
+  result.poc = result.profile[0].price; 
   for (const point of result.profile) {
     if (point.volume > maxVolume) {
       maxVolume = point.volume;
       result.poc = point.price;
     }
   }
+  logger.debug(`[CalcVP] POC calculated: Price=${result.poc}, Volume=${maxVolume}`);
 
-  // Рассчитать Value Area
   const sortedByVolume = [...result.profile].sort((a, b) => b.volume - a.volume);
   let volumeForVA = 0;
   const vaThreshold = result.totalVolume * vaPercentage;
   const pricesInVA: number[] = [];
+  logger.debug(`[CalcVP] Calculating VA. Threshold: ${vaThreshold.toFixed(2)} (totalVolume: ${result.totalVolume}, vaPercentage: ${vaPercentage})`);
 
   for (const point of sortedByVolume) {
     if (volumeForVA >= vaThreshold && pricesInVA.length > 0) break;
     volumeForVA += point.volume;
     pricesInVA.push(point.price);
-    if (volumeForVA >= vaThreshold && pricesInVA.length > 0) break; // Проверка после добавления, чтобы включить последнюю точку
+    // Log first few points added to VA
+    if (pricesInVA.length <= 3) {
+        logger.debug(`[CalcVP-VAcalc] Added to VA: Price=${point.price.toFixed(4)}, Volume=${point.volume}. volumeForVA_now=${volumeForVA.toFixed(2)}`);
+    }
+    if (volumeForVA >= vaThreshold && pricesInVA.length > 0) {
+        logger.debug(`[CalcVP-VAcalc] VA threshold reached. volumeForVA=${volumeForVA.toFixed(2)}, pricesInVA count=${pricesInVA.length}`);
+        break;
+    }
   }
 
   if (pricesInVA.length > 0) {
     result.vah = Math.max(...pricesInVA);
     result.val = Math.min(...pricesInVA);
-  } else if (result.profile.length > 0) { // Если VA не сформировалась, но профиль есть
+    logger.debug(`[CalcVP] VAH: ${result.vah}, VAL: ${result.val}`);
+  } else if (result.profile.length > 0) { 
+      logger.warn('[CalcVP] pricesInVA is empty, but profile has data. Setting VAH/VAL to first profile point.');
       result.vah = result.profile[0].price;
       result.val = result.profile[0].price;
+  } else {
+      logger.warn('[CalcVP] pricesInVA is empty and profile is also empty. VAH/VAL will be null.');
   }
   
-  // Если POC, VAH, VAL не были установлены (например, одна точка в профиле)
   if (result.profile.length === 1) {
+      logger.info('[CalcVP] Profile has only one point. Setting POC/VAH/VAL to this point.');
       result.poc = result.profile[0].price;
       result.vah = result.profile[0].price;
       result.val = result.profile[0].price;
   }
-
+  
+  logger.debug('[CalcVP] Final result:', JSON.stringify(result, null, 2));
   return result;
 };
 

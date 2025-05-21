@@ -22,6 +22,7 @@ export enum TradeDirection {
 
 export interface Trade {
   id: string; // UUID
+  pair: string; // Символ пары, для которой была совершена сделка
   entryTimestamp: number;
   exitTimestamp?: number;
   direction: TradeDirection;
@@ -35,6 +36,7 @@ export interface Trade {
   entryReason?: string;
   exitReason?: string; // Например, 'SL', 'TP', 'Market Close', 'Signal Reversed'
   fees?: number;
+  status?: 'active' | 'closed' | 'cancelled'; // Статус сделки
   // Optional fields from backend calculation if available from frontend definition
   commission?: number;
   slippage?: number;

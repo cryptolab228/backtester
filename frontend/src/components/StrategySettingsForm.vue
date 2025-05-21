@@ -106,11 +106,11 @@
             <InputNumber id="riskTpMultiplier" v-model="editableSettings.risk.takeProfitMultiplier" mode="decimal" :min="0" :minFractionDigits="1" :maxFractionDigits="2"/>
         </div>
             <div class="p-field p-col-12 p-md-6">
-            <label for="riskPositionSizePercentage">% капитала на сделку</label>
+            <label for="riskPositionSizePercentage">Доля капитала на сделку (0.01 = 1%)</label>
             <InputNumber id="riskPositionSizePercentage" v-model="editableSettings.risk.positionSizePercentage" mode="decimal" :min="0" :max="1" :minFractionDigits="3" :maxFractionDigits="3" />
         </div>
         <div class="p-field p-col-12 p-md-6">
-            <label for="riskMaxRiskPerTrade">Макс. риск на сделку %</label>
+            <label for="riskMaxRiskPerTrade">Макс. риск на сделку (0.01 = 1%)</label>
             <InputNumber id="riskMaxRiskPerTrade" v-model="editableSettings.risk.maxRiskPerTradePercentage" mode="decimal" :min="0" :max="1" :minFractionDigits="3" :maxFractionDigits="3" />
         </div>
         <div class="p-field-checkbox p-col-12 p-md-6">

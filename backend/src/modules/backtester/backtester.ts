@@ -88,6 +88,23 @@ export const runBacktest = async (
   const { strategyCandles, volumeProfile } = strategyLogicResult;
   logger.info(`[RunBacktest] Strategy logic applied. StrategyCandles count: ${strategyCandles?.length ?? 0}`);
 
+  // Добавим детальное логирование первых и последних нескольких strategyCandles
+  if (strategyCandles && strategyCandles.length > 0) {
+    const logCount = Math.min(5, strategyCandles.length);
+    logger.debug('[RunBacktest] First few strategy candles:');
+    for (let k = 0; k < logCount; k++) {
+      logger.debug(`[Candle-${k}] ${JSON.stringify(strategyCandles[k])}`);
+    }
+    if (strategyCandles.length > logCount * 2) { // Если свечей много, логируем и последние
+      logger.debug('[RunBacktest] Last few strategy candles:');
+      for (let k = strategyCandles.length - logCount; k < strategyCandles.length; k++) {
+        logger.debug(`[Candle-${k}] ${JSON.stringify(strategyCandles[k])}`);
+      }
+    }
+  } else {
+    logger.warn('[RunBacktest] No strategy candles available after applyStrategyLogic.');
+  }
+
   if (!strategyCandles || strategyCandles.length === 0) {
     logger.warn('[RunBacktest] No strategy candles generated or returned empty. Aborting.');
     // Возвращаем пустой результат, если нет свечей или они не обработаны
@@ -141,8 +158,9 @@ export const runBacktest = async (
     }
 
     // Логика управления рисками и размером позиции
-    const riskSettings = params.strategyParameters?.risk; 
+    const riskSettings = params.strategyParameters?.risk;
     
+    // Закрытие активной сделки
     if (activeTrade) {
       let exitReason: string | undefined = undefined;
       let exitPrice: number | undefined = undefined;
@@ -185,119 +203,69 @@ export const runBacktest = async (
         currentCapital += pnl;
         logger.info(`[RunBacktest-TradeClose] ID: ${activeTrade.id}, PnL: ${pnl.toFixed(2)}, Capital: ${currentCapital.toFixed(2)}`);
         
-        // Обновление пикового капитала и максимальной просадки
         peakCapital = Math.max(peakCapital, currentCapital);
         const drawdown = peakCapital > 0 ? ((peakCapital - currentCapital) / peakCapital) * 100 : 0;
         maxDrawdown = Math.max(maxDrawdown, drawdown);
 
         trades.push({ ...activeTrade });
-        // Добавляем точку в кривую эквити после закрытия сделки
         if (activeTrade.exitTimestamp) {
           equityCurve.push({ timestamp: activeTrade.exitTimestamp, capital: currentCapital });
+          logger.info(`[RunBacktest-TradeClose][${new Date(activeTrade.exitTimestamp).toISOString()}] Closed ${activeTrade.direction} trade. Entry: ${activeTrade.entryPrice}, Exit: ${activeTrade.exitPrice}, Size: ${activeTrade.size}, SL: ${activeTrade.stopLoss}, TP: ${activeTrade.takeProfit}, Reason: ${activeTrade.exitReason}, PnL: ${activeTrade.pnl?.toFixed(2)}, Capital: ${currentCapital.toFixed(2)}`);
         }
-        logger.info(`[RunBacktest-TradeClose][${new Date(activeTrade.exitTimestamp!).toISOString()}] Closed ${activeTrade.direction} trade. Entry: ${activeTrade.entryPrice}, Exit: ${activeTrade.exitPrice}, Size: ${activeTrade.size}, SL: ${activeTrade.stopLoss}, TP: ${activeTrade.takeProfit}, Reason: ${activeTrade.exitReason}, PnL: ${activeTrade.pnl?.toFixed(2)}, Capital: ${currentCapital.toFixed(2)}`);
         activeTrade = null;
       }
-    }
-
-    // Проверка условий входа и открытие новых сделок
-    if (!activeTrade) {
-      // logger.debug(`[RunBacktest-Loop ${i}] No active trade. Checking entry conditions...`);
-      let entryPrice = 0;
-      let positionSize = 0;
-      let newTrade: Trade | null = null;
-      let calculatedSl: number | undefined = undefined;
-      let calculatedTp: number | undefined = undefined;
-
-      if (currentCandle.entryConditionLong) {
-        logger.debug(`[RunBacktest-Loop ${i}] EntryConditionLong met.`);
-        entryPrice = currentCandle.close; // Пример: вход по цене закрытия сигнальной свечи
-        positionSize = calculatePositionSize(currentCapital, entryPrice, currentCandle, riskSettings);
-        logger.debug(`[RunBacktest-Loop ${i}] Calculated position size for LONG: ${positionSize}`);
-
-        if (typeof currentCandle.timestamp === 'number') {
-            if (positionSize > 0 && 
-                riskSettings && 
-                typeof currentCandle.atr === 'number' && 
-                currentCandle.atr > 0 && 
-                typeof riskSettings.stopLossMultiplier === 'number' &&
-                typeof riskSettings.takeProfitMultiplier === 'number'
-            ) {
-              const atrValue: number = currentCandle.atr;
-              const slMultiplier: number = riskSettings.stopLossMultiplier;
-              const tpMultiplier: number = riskSettings.takeProfitMultiplier;
-
-              calculatedSl = entryPrice - atrValue * slMultiplier;
-              calculatedTp = entryPrice + atrValue * tpMultiplier;
-              logger.debug(`[RunBacktest-Loop ${i}] For LONG: Entry=${entryPrice}, ATR=${atrValue}, SLMult=${slMultiplier}, TPMult=${tpMultiplier} => SL=${calculatedSl}, TP=${calculatedTp}`);
-
-              newTrade = {
-                id: uuidv4(),
-                direction: TradeDirection.LONG,
-                entryTimestamp: currentCandle.timestamp,
-                entryPrice,
-                size: positionSize,
-                stopLoss: calculatedSl,
-                takeProfit: calculatedTp,
-                entryReason: 'Long Signal',
-              };
-            }
-        } else {
-            logger.warn(`[RunBacktest-Loop ${i}] Candle (index ${i}, time: ${new Date(currentCandle.timestamp ?? 0).toISOString()}) missing or invalid timestamp. Cannot create Long trade.`);
-        }
-      } else if (currentCandle.entryConditionShort) {
-        // Аналогично для короткой позиции
-        // logger.debug(`[RunBacktest-Loop ${i}] EntryConditionShort met.`);
-        entryPrice = currentCandle.close;
-        positionSize = calculatePositionSize(currentCapital, entryPrice, currentCandle, riskSettings);
-        logger.debug(`[RunBacktest-Loop ${i}] Calculated position size for SHORT: ${positionSize}`);
-
-        if (typeof currentCandle.timestamp === 'number') {
-            if (positionSize > 0 && 
-                riskSettings && 
-                typeof currentCandle.atr === 'number' && 
-                currentCandle.atr > 0 && 
-                typeof riskSettings.stopLossMultiplier === 'number' &&
-                typeof riskSettings.takeProfitMultiplier === 'number'
-            ) {
-                const atrValue: number = currentCandle.atr;
-                const slMultiplier: number = riskSettings.stopLossMultiplier;
-                const tpMultiplier: number = riskSettings.takeProfitMultiplier;
-
-                calculatedSl = entryPrice + atrValue * slMultiplier;
-                calculatedTp = entryPrice - atrValue * tpMultiplier;
-                logger.debug(`[RunBacktest-Loop ${i}] For SHORT: Entry=${entryPrice}, ATR=${atrValue}, SLMult=${slMultiplier}, TPMult=${tpMultiplier} => SL=${calculatedSl}, TP=${calculatedTp}`);
-
-                newTrade = {
-                  id: uuidv4(),
-                  direction: TradeDirection.SHORT,
-                  entryTimestamp: currentCandle.timestamp,
-                  entryPrice,
-                  size: positionSize,
-                  stopLoss: calculatedSl,
-                  takeProfit: calculatedTp,
-                  entryReason: 'Short Signal',
-                };
-            }
-        } else {
-            logger.warn(`[RunBacktest-Loop ${i}] Candle (index ${i}, time: ${new Date(currentCandle.timestamp ?? 0).toISOString()}) missing or invalid timestamp. Cannot create Short trade.`);
-        }
-      }
-
-      if (newTrade && typeof currentCandle.timestamp === 'number') {
-        activeTrade = newTrade;
-        trades.push({ ...activeTrade });
-        // Добавляем точку в кривую эквити при открытии сделки
-        equityCurve.push({ timestamp: activeTrade.entryTimestamp, capital: currentCapital }); // Капитал еще не изменился
-        // console.log(`[${new Date(activeTrade.entryTimestamp).toISOString()}] Opened ${activeTrade.direction} trade. Entry: ${activeTrade.entryPrice}, Size: ${activeTrade.size}, SL: ${activeTrade.stopLoss}, TP: ${activeTrade.takeProfit}`);
-        logger.info(`[RunBacktest-TradeOpen][${new Date(activeTrade.entryTimestamp).toISOString()}] Opened ${activeTrade.direction} trade. Entry: ${activeTrade.entryPrice}, Size: ${activeTrade.size}, SL: ${activeTrade.stopLoss}, TP: ${activeTrade.takeProfit}, Capital (before trade): ${currentCapital.toFixed(2)}`);
-      }
     } else {
-      // Обновляем кривую эквити на каждой свече, если нет активной сделки или сделка не была закрыта/открыта на этой свече
-      // Это нужно, чтобы кривая эквити отражала текущий капитал даже без сделок
-      // Проверяем, что последняя точка в кривой не на этой же свече (избегаем дубликатов)
-      if (currentCandle.timestamp && equityCurve[equityCurve.length - 1]?.timestamp !== currentCandle.timestamp) {
-        equityCurve.push({ timestamp: currentCandle.timestamp, capital: currentCapital });
+      // Открытие новой сделки
+      let direction: TradeDirection | undefined = undefined;
+      if (currentCandle.entryConditionLong) {
+        direction = TradeDirection.LONG;
+      } else if (currentCandle.entryConditionShort) {
+        direction = TradeDirection.SHORT;
+      }
+
+      if (direction && currentCandle.atr && currentCandle.atr > 0) {
+        const entryPrice = currentCandle.close; // Вход по цене закрытия свечи сигнала
+        const positionSize = calculatePositionSize(currentCapital, entryPrice, currentCandle, riskSettings);
+
+        if (positionSize > 0) {
+          let stopLossPrice: number | undefined;
+          let takeProfitPrice: number | undefined;
+          const atrForTrade = currentCandle.atr;
+
+          if (riskSettings?.stopLossMultiplier && atrForTrade > 0) {
+            if (direction === TradeDirection.LONG) {
+              stopLossPrice = currentCandle.low - atrForTrade * riskSettings.stopLossMultiplier; // От Low свечи сигнала
+            } else { // SHORT
+              stopLossPrice = currentCandle.high + atrForTrade * riskSettings.stopLossMultiplier; // От High свечи сигнала
+            }
+          }
+
+          if (riskSettings?.takeProfitMultiplier && atrForTrade > 0) {
+            if (direction === TradeDirection.LONG) {
+              // takeProfitPrice = entryPrice + atrForTrade * riskSettings.takeProfitMultiplier; // Старая логика от entryPrice
+              takeProfitPrice = currentCandle.close + atrForTrade * riskSettings.takeProfitMultiplier; // Новая логика от Close свечи сигнала (аналогично Pine)
+            } else { // SHORT
+              // takeProfitPrice = entryPrice - atrForTrade * riskSettings.takeProfitMultiplier; // Старая логика от entryPrice
+              takeProfitPrice = currentCandle.close - atrForTrade * riskSettings.takeProfitMultiplier; // Новая логика от Close свечи сигнала (аналогично Pine)
+            }
+          }
+
+          const newTradeId = uuidv4();
+          activeTrade = {
+            id: newTradeId,
+            pair: params.pairSymbol,
+            direction: direction,
+            entryTimestamp: currentCandle.timestamp,
+            entryPrice,
+            size: positionSize,
+            stopLoss: stopLossPrice,
+            takeProfit: takeProfitPrice,
+            status: 'active',
+          };
+          logger.info(`[RunBacktest-TradeOpen][${new Date(activeTrade.entryTimestamp).toISOString()}] New ${activeTrade.direction} trade opened. Price: ${activeTrade.entryPrice}, Size: ${activeTrade.size}, SL: ${activeTrade.stopLoss}, TP: ${activeTrade.takeProfit}`);
+        } else {
+          logger.warn(`[RunBacktest-Loop ${i}] Position size is 0 or less, no trade opened.`);
+        }
       }
     }
   }

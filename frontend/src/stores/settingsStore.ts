@@ -52,8 +52,8 @@ const initialStrategyParameters: StrategyParameters = {
     useTrailingStop: false,
     trailingStopOffsetMultiplier: 1,
     maxTradesPerDay: 0, // 0 - без ограничений
-    positionSizePercentage: 0.01, 
-    maxRiskPerTradePercentage: 0.01, 
+    positionSizePercentage: 0.01, // 1% от капитала по умолчанию
+    maxRiskPerTradePercentage: 0.01, // 1% максимального риска на сделку по умолчанию
   },
   globalAtrPeriod: 14,
   avgVolumePeriod: 20,
