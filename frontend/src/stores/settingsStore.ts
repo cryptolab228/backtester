@@ -22,41 +22,46 @@ export interface SettingsState {
 // Адаптировано к новым типам, соответствующим backend/src/modules/strategy_logic/strategy.ts
 const initialStrategyParameters: StrategyParameters = {
   dlc: {
-    // period: undefined, // Можно оставить undefined или задать значение
-    numProfiles: 1,
+    period: 40, // Новый параметр из Pine: dlc_period
+    pocLookback: 5, // Новый параметр из Pine: poc_lookback
+    numProfiles: 1, 
     pocColor: '#FF0000',
     vahColor: '#00FF00',
     valColor: '#0000FF',
-    numBins: 20,
-    vaPercentage: 0.7,
+    numBins: 100, // Изменено с 20 на 100, чтобы соответствовать внутренней логике Pine для профиля
+    vaPercentage: 0.7, // Соответствует Pine: value_area_percent (70.0 / 100)
   },
   nwe: {
-    lookbackPeriod: 20,
-    atrPeriod: 10,
-    atrMultiplier: 2,
+    enabled: true, // Новый параметр из Pine: use_nwe
+    bandwidth: 8.0, // Новый параметр из Pine: h
+    multiplier: 3.0, // Переименовано с atrMultiplier и значение изменено (Pine: mult)
+    source: 'close', // Новый параметр из Pine: nwe_src
+    repaint: false, // Новый параметр из Pine: repaint
+    // lookbackPeriod и atrPeriod удалены, т.к. не имеют прямого аналога во входных данных Pine NWE
     upColor: '#00FFFF',
     downColor: '#FFFF00',
   },
   clusters: {
     source: 'volume',
-    thresholdMultiplier: 2,
-    lookbackPeriod: 20,
-    confirmationBars: 0,
+    minVolumeThresholdMultiplier: 1.5, // Переименовано с thresholdMultiplier и значение изменено (Pine: min_volume_threshold)
+    deltaThreshold: 0.7, // Новый параметр из Pine: delta_threshold
+    lookbackPeriod: 20, // Соответствует периоду SMA для avg_volume в Pine
+    confirmationBars: 1, // Изменено с 0, чтобы соответствовать Pine: cluster[1]
     buyColor: '#00FF00',
     sellColor: '#FF0000',
   },
   risk: { // Изменено с riskManagement на risk
-    atrPeriod: 14,
-    stopLossMultiplier: 1.5,
-    takeProfitMultiplier: 3,
-    useTrailingStop: false,
-    trailingStopOffsetMultiplier: 1,
-    maxTradesPerDay: 0, // 0 - без ограничений
-    positionSizePercentage: 0.01, // 1% от капитала по умолчанию
-    maxRiskPerTradePercentage: 0.01, // 1% максимального риска на сделку по умолчанию
+    atrPeriod: 14, // Соответствует Pine: atr_period
+    positionSizePercentage: 0.02, // Изменено с 0.01 (Pine: risk_percent 2.0 / 100)
+    stopLossMultiplier: 2.0, // Изменено с 1.5 (Pine: stop_loss_atr)
+    takeProfitMultiplier: 5.0, // Изменено с 3 (Pine: take_profit_atr)
+    useTrailingStop: true, // Изменено с false (Pine: use_trailing_stop)
+    trailingStopOffsetMultiplier: 2.0, // Изменено с 1 (Pine: trail_offset_mult)
+    trailingStopStepMultiplier: 1.0, // Новый параметр из Pine: trailing_step (используется для trail_step)
+    maxTradesPerDay: 2, // Изменено с 0 (Pine: max_trades_per_day)
+    maxRiskPerTradePercentage: 0.01, // Существующий параметр, нет прямого аналога в Pine, но может использоваться для доп. контроля
   },
-  globalAtrPeriod: 14,
-  avgVolumePeriod: 20,
+  // globalAtrPeriod и avgVolumePeriod удалены, используются аналоги внутри risk и clusters
 };
 
 // Функция для безопасной загрузки и ОЧИСТКИ из localStorage
@@ -65,72 +70,49 @@ const loadParametersFromLocalStorage = (): StrategyParameters | null => {
     const stored = localStorage.getItem(STRATEGY_PARAMS_LOCAL_STORAGE_KEY);
     if (stored) {
       const parsedStored = JSON.parse(stored);
-      // Очистка: создаем новый объект только с ожидаемыми полями из initialStrategyParameters
-      // и их вложенных структур.
       const cleanParameters: StrategyParameters = {};
 
-      if (parsedStored.dlc) {
-        cleanParameters.dlc = {};
-        for (const key in initialStrategyParameters.dlc) {
-          if (Object.prototype.hasOwnProperty.call(initialStrategyParameters.dlc, key) && 
-              Object.prototype.hasOwnProperty.call(parsedStored.dlc, key)) {
-            (cleanParameters.dlc as any)[key] = parsedStored.dlc[key];
+      // Обновленная логика для каждого под-объекта параметров
+      const loadSubParameters = <T extends Record<string, any>>(
+        initialSubParams: T,
+        parsedSubParams: Partial<T> | undefined
+      ): T => {
+        const cleanSub: Partial<T> = {};
+        if (parsedSubParams) {
+          for (const key in initialSubParams) {
+            if (Object.prototype.hasOwnProperty.call(initialSubParams, key)) {
+              if (Object.prototype.hasOwnProperty.call(parsedSubParams, key) && parsedSubParams[key] !== undefined) {
+                cleanSub[key as keyof T] = parsedSubParams[key as keyof T]; // Используем значение из localStorage, если оно есть
+              } else {
+                cleanSub[key as keyof T] = initialSubParams[key]; // Иначе используем значение по умолчанию
+              }
+            }
           }
-        }
-      } else {
-        cleanParameters.dlc = JSON.parse(JSON.stringify(initialStrategyParameters.dlc));
-      }
-
-      if (parsedStored.nwe) {
-        cleanParameters.nwe = {};
-        for (const key in initialStrategyParameters.nwe) {
-          if (Object.prototype.hasOwnProperty.call(initialStrategyParameters.nwe, key) &&
-              Object.prototype.hasOwnProperty.call(parsedStored.nwe, key)) {
-            (cleanParameters.nwe as any)[key] = parsedStored.nwe[key];
+           // Проверка на старые поля, которые могли быть переименованы
+           if ('atrMultiplier' in parsedSubParams && initialSubParams === initialStrategyParameters.nwe) {
+            // Если есть старый atrMultiplier в NWE и multiplier не установлен из localStorage,
+            // можно попытаться его перенести, но безопаснее использовать новое значение по умолчанию.
+            // Для простоты пока оставляем новое значение по умолчанию.
           }
-        }
-      } else {
-        cleanParameters.nwe = JSON.parse(JSON.stringify(initialStrategyParameters.nwe));
-      }
-
-      if (parsedStored.clusters) {
-        cleanParameters.clusters = {};
-        for (const key in initialStrategyParameters.clusters) {
-          if (Object.prototype.hasOwnProperty.call(initialStrategyParameters.clusters, key) &&
-              Object.prototype.hasOwnProperty.call(parsedStored.clusters, key)) {
-            (cleanParameters.clusters as any)[key] = parsedStored.clusters[key];
+          if ('thresholdMultiplier' in parsedSubParams && initialSubParams === initialStrategyParameters.clusters) {
+            // Аналогично для clusters.thresholdMultiplier -> minVolumeThresholdMultiplier
           }
+        } else {
+          // Если в localStorage нет такого под-объекта, полностью используем значения по умолчанию
+          return JSON.parse(JSON.stringify(initialSubParams));
         }
-      } else {
-        cleanParameters.clusters = JSON.parse(JSON.stringify(initialStrategyParameters.clusters));
-      }
-
-      if (parsedStored.risk) {
-        cleanParameters.risk = {};
-        for (const key in initialStrategyParameters.risk) {
-          if (Object.prototype.hasOwnProperty.call(initialStrategyParameters.risk, key) &&
-              Object.prototype.hasOwnProperty.call(parsedStored.risk, key)) {
-            (cleanParameters.risk as any)[key] = parsedStored.risk[key];
-          }
-        }
-      } else {
-        cleanParameters.risk = JSON.parse(JSON.stringify(initialStrategyParameters.risk));
-      }
+        return cleanSub as T; // Возвращаем собранный объект
+      };
       
-      // Копируем корневые поля globalAtrPeriod и avgVolumePeriod, если они есть в stored
-      if (Object.prototype.hasOwnProperty.call(parsedStored, 'globalAtrPeriod')) {
-        cleanParameters.globalAtrPeriod = parsedStored.globalAtrPeriod;
-      } else {
-        cleanParameters.globalAtrPeriod = initialStrategyParameters.globalAtrPeriod;
-      }
-      if (Object.prototype.hasOwnProperty.call(parsedStored, 'avgVolumePeriod')) {
-        cleanParameters.avgVolumePeriod = parsedStored.avgVolumePeriod;
-      } else {
-        cleanParameters.avgVolumePeriod = initialStrategyParameters.avgVolumePeriod;
-      }
+      cleanParameters.dlc = loadSubParameters(initialStrategyParameters.dlc!, parsedStored.dlc);
+      cleanParameters.nwe = loadSubParameters(initialStrategyParameters.nwe!, parsedStored.nwe);
+      cleanParameters.clusters = loadSubParameters(initialStrategyParameters.clusters!, parsedStored.clusters);
+      cleanParameters.risk = loadSubParameters(initialStrategyParameters.risk!, parsedStored.risk);
       
-      // Важно: после очистки, сохраняем очищенные параметры обратно в localStorage,
-      // чтобы при следующей загрузке не повторять процесс для тех же "грязных" данных.
+      // Удаляем загрузку устаревших корневых полей globalAtrPeriod и avgVolumePeriod
+      // if (Object.prototype.hasOwnProperty.call(parsedStored, 'globalAtrPeriod')) { ... } // Удалено
+      // if (Object.prototype.hasOwnProperty.call(parsedStored, 'avgVolumePeriod')) { ... } // Удалено
+            
       localStorage.setItem(STRATEGY_PARAMS_LOCAL_STORAGE_KEY, JSON.stringify(cleanParameters));
       return cleanParameters;
     }

@@ -1,5 +1,9 @@
-import type { StrategyParameters, DLCSettings, NWESettings, ClusterSettings, RiskManagementSettings } from '../modules/strategy_logic/strategy';
+import type { StrategyParameters } from '../modules/strategy_logic/strategy';
+// Импортируем актуальные параметры по умолчанию из strategy.ts
+import { DefaultStrategyParameters } from '../modules/strategy_logic/strategy';
 
+// Удаляем устаревшее определение defaultStrategyParameters, так как оно теперь импортируется
+/*
 const defaultStrategyParameters: StrategyParameters = {
   dlc: {
     numProfiles: 1,
@@ -37,7 +41,9 @@ const defaultStrategyParameters: StrategyParameters = {
   globalAtrPeriod: 14,
   avgVolumePeriod: 20, 
 };
+*/
 
 export const getDefaultStrategyParameters = (): StrategyParameters => {
-  return JSON.parse(JSON.stringify(defaultStrategyParameters));
+  // Возвращаем клон импортированных DefaultStrategyParameters
+  return JSON.parse(JSON.stringify(DefaultStrategyParameters));
 }; 

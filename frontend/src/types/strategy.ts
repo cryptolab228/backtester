@@ -1,5 +1,6 @@
 export interface DLCSettings {
   period?: number; 
+  pocLookback?: number;
   numProfiles?: number; 
   pocColor?: string;
   vahColor?: string;
@@ -9,16 +10,19 @@ export interface DLCSettings {
 }
 
 export interface NWESettings {
-  lookbackPeriod?: number; 
-  atrPeriod?: number; 
-  atrMultiplier?: number; 
+  enabled?: boolean;
+  bandwidth?: number;
+  multiplier?: number;
+  source?: 'open' | 'high' | 'low' | 'close';
+  repaint?: boolean;
   upColor?: string;
   downColor?: string;
 }
 
 export interface ClusterSettings {
   source?: 'delta' | 'volume'; 
-  thresholdMultiplier?: number; 
+  minVolumeThresholdMultiplier?: number;
+  deltaThreshold?: number;
   lookbackPeriod?: number;
   confirmationBars?: number; 
   buyColor?: string;   
@@ -31,6 +35,7 @@ export interface RiskManagementSettings {
   takeProfitMultiplier?: number; 
   useTrailingStop?: boolean; 
   trailingStopOffsetMultiplier?: number;
+  trailingStopStepMultiplier?: number;
   maxTradesPerDay?: number; 
   positionSizePercentage?: number; 
   maxRiskPerTradePercentage?: number; 
@@ -41,8 +46,6 @@ export interface StrategyParameters {
   nwe?: NWESettings;
   clusters?: ClusterSettings;
   risk?: RiskManagementSettings;
-  globalAtrPeriod?: number;
-  avgVolumePeriod?: number;
 }
 
 // New Interfaces for Backtesting

@@ -13,43 +13,48 @@ import {
 import logger from '../../utils/logger'; // Импорт логгера
 
 export interface DLCSettings {
-  period?: number; // Период для расчета Volume Profile (например, дневной)
-  dlcPeriod?: number; // <--- ДОБАВЛЕНО: Период окна для динамического VP (аналог dlc_period в Pine)
-  pocLookback?: number; // <--- ДОБАВЛЕНО: Период для определения направления POC (аналог poc_lookback в Pine)
-  numProfiles?: number; // Количество профилей для отображения/расчета (например, 1 для текущего, 2 для текущего и предыдущего)
+  period?: number; 
+  dlcPeriod?: number; 
+  pocLookback?: number; 
+  numProfiles?: number; 
   pocColor?: string;
   vahColor?: string;
   valColor?: string;
-  numBins?: number;
-  vaPercentage?: number;
+  numBins?: number; // Будет 100 по умолчанию
+  vaPercentage?: number; // Будет 0.7 по умолчанию
 }
 
 export interface NWESettings {
-  lookbackPeriod?: number; // Период для поиска экстремумов NWE (уже было nweLookback)
-  atrPeriod?: number; // Период ATR для определения силы волны NWE
-  atrMultiplier?: number; // Множитель ATR для порога NWE
+  enabled?: boolean; // Новый параметр
+  bandwidth?: number; // Новый параметр (h)
+  multiplier?: number; // Переименовано с atrMultiplier (mult)
+  source?: 'open' | 'high' | 'low' | 'close'; // Новый параметр (nwe_src)
+  repaint?: boolean; // Новый параметр
+  // lookbackPeriod и atrPeriod удалены из настроек NWE, т.к. в Pine они внутренние или не настраиваются для NWE напрямую
   upColor?: string;
   downColor?: string;
 }
 
 export interface ClusterSettings {
-  source?: 'delta' | 'volume'; // Источник для кластеров (дельты или объема)
-  thresholdMultiplier?: number; // Множитель для определения значительного кластера (например, от среднего объема/дельты)
-  lookbackPeriod?: number; // Период для расчета базового значения (среднего объема/дельты)
-  confirmationBars?: number; // Количество баров для подтверждения кластера
+  source?: 'delta' | 'volume'; 
+  minVolumeThresholdMultiplier?: number; // Переименовано с thresholdMultiplier
+  deltaThreshold?: number; // Новый параметр
+  lookbackPeriod?: number; // Для среднего объема/дельты
+  confirmationBars?: number; // Для подтверждения кластера
   buyColor?: string;
   sellColor?: string;
 }
 
 export interface RiskManagementSettings {
-  atrPeriod?: number; // Период ATR для расчета SL/TP (уже было atrPeriod)
-  stopLossMultiplier?: number; // Множитель ATR для стоп-лосса
-  takeProfitMultiplier?: number; // Множитель ATR для тейк-профита
-  useTrailingStop?: boolean; // Использовать ли трейлинг-стоп
-  trailingStopOffsetMultiplier?: number; // Множитель ATR для смещения трейлинг-стопа
-  maxTradesPerDay?: number; // Максимальное количество сделок в день
-  positionSizePercentage?: number; // Процент от капитала на сделку
-  maxRiskPerTradePercentage?: number; // Максимальный риск на сделку в процентах от капитала (например, 0.01 для 1%)
+  atrPeriod?: number; 
+  stopLossMultiplier?: number; 
+  takeProfitMultiplier?: number; 
+  useTrailingStop?: boolean; 
+  trailingStopOffsetMultiplier?: number; 
+  trailingStopStepMultiplier?: number; // Новый параметр
+  maxTradesPerDay?: number; 
+  positionSizePercentage?: number; 
+  maxRiskPerTradePercentage?: number; 
 }
 
 export interface StrategyParameters {
@@ -57,50 +62,52 @@ export interface StrategyParameters {
   nwe?: NWESettings;
   clusters?: ClusterSettings;
   risk?: RiskManagementSettings;
-  globalAtrPeriod?: number; // Общий период ATR, если нужен одинаковый для разных модулей
-  avgVolumePeriod?: number; // Период для AvgVolume
+  // globalAtrPeriod и avgVolumePeriod удалены
 }
 
 // Добавляем экспорт настроек по умолчанию
 export const DefaultStrategyParameters: StrategyParameters = {
   dlc: {
-    period: undefined, // Например, можно не устанавливать по умолчанию или задать конкретное значение, если оно всегда нужно
-    dlcPeriod: 40, // <--- ДОБАВЛЕНО: Значение по умолчанию как в Pine
-    pocLookback: 5,  // <--- ДОБАВЛЕНО: Значение по умолчанию как в Pine
+    period: 40, // Pine: dlc_period
+    dlcPeriod: 40, // Используем period для основного окна VP, dlcPeriod уже был, оставляем для совместимости если где-то использовался, но Pine dlc_period -> period
+    pocLookback: 5,  // Pine: poc_lookback
     numProfiles: 1,
     pocColor: '#FF0000',
     vahColor: '#00FF00',
     valColor: '#0000FF',
-    numBins: 20,
-    vaPercentage: 0.7,
+    numBins: 100, // Pine: внутренне 100 для VP
+    vaPercentage: 0.7, // Pine: value_area_percent (70.0 / 100)
   },
   nwe: {
-    lookbackPeriod: 20,
-    atrPeriod: 10, // Может наследоваться от globalAtrPeriod или risk.atrPeriod
-    atrMultiplier: 2,
+    enabled: true, // Pine: use_nwe
+    bandwidth: 8.0, // Pine: h
+    multiplier: 3.0, // Pine: mult
+    source: 'close', // Pine: nwe_src
+    repaint: false, // Pine: repaint
     upColor: '#00FFFF',
     downColor: '#FFFF00',
   },
   clusters: {
-    source: 'volume',
-    thresholdMultiplier: 2,
-    lookbackPeriod: 20, // Для среднего объема
-    confirmationBars: 0, // Пока не используется активно
+    source: 'volume', // Pine: Cluster source (volume/delta based on logic)
+    minVolumeThresholdMultiplier: 1.5, // Pine: min_volume_threshold
+    deltaThreshold: 0.7, // Pine: delta_threshold
+    lookbackPeriod: 20, // Pine: avg_volume = ta.sma(volume, 20)
+    confirmationBars: 1, // Pine: bullish_cluster[1]
     buyColor: '#00FF00',
     sellColor: '#FF0000',
   },
   risk: {
-    atrPeriod: 14,
-    stopLossMultiplier: 1.5,
-    takeProfitMultiplier: 3,
-    useTrailingStop: false,
-    trailingStopOffsetMultiplier: 1,
-    maxTradesPerDay: 0, // 0 - без ограничений
-    positionSizePercentage: 0.01, // 1% от капитала
-    maxRiskPerTradePercentage: 0.01, // 1% риска на сделку
+    atrPeriod: 14, // Pine: atr_period
+    positionSizePercentage: 0.02, // Pine: risk_percent (2.0 / 100)
+    stopLossMultiplier: 2.0, // Pine: stop_loss_atr
+    takeProfitMultiplier: 5.0, // Pine: take_profit_atr
+    useTrailingStop: true, // Pine: use_trailing_stop
+    trailingStopOffsetMultiplier: 2.0, // Pine: trail_offset_mult
+    trailingStopStepMultiplier: 1.0, // Pine: trailing_step (ATR множитель для шага)
+    maxTradesPerDay: 2, // Pine: max_trades_per_day
+    maxRiskPerTradePercentage: 0.01, // Остается для доп. контроля
   },
-  globalAtrPeriod: 14,
-  avgVolumePeriod: 20,
+  // globalAtrPeriod и avgVolumePeriod удалены
 };
 
 export interface StrategyCandle extends CandleData {
@@ -142,26 +149,49 @@ export const applyStrategyLogic = (
         : {}),
   }));
 
-  const globalAtrPeriod = params.globalAtrPeriod ?? params.risk?.atrPeriod ?? 14;
-  const nweAtrPeriod = params.nwe?.atrPeriod ?? globalAtrPeriod ?? 10;
-  const nweLookbackPeriod = params.nwe?.lookbackPeriod ?? 20;
-  const nweAtrMultiplier = params.nwe?.atrMultiplier ?? 2;
-  const vpNumBins = params.dlc?.numBins ?? 20;
+  // Обновленное извлечение параметров
+  const atrPeriodForRisk = params.risk?.atrPeriod ?? 14;
+  
+  // Параметры NWE
+  const nweEnabled = params.nwe?.enabled ?? true;
+  const nweBandwidth = params.nwe?.bandwidth ?? 8.0;
+  const nweMultiplier = params.nwe?.multiplier ?? 3.0;
+  const nweSource = params.nwe?.source ?? 'close';
+  // const nweRepaint = params.nwe?.repaint ?? false; // Пока не используется в вызове calculateNWE
+
+  const vpNumBins = params.dlc?.numBins ?? 100;
   const vpVaPercentage = params.dlc?.vaPercentage ?? 0.7;
-  const avgVolPeriod = params.clusters?.lookbackPeriod ?? params.avgVolumePeriod ?? 20;
+  const avgVolPeriod = params.clusters?.lookbackPeriod ?? 20;
   const clusterSource = params.clusters?.source ?? 'volume';
-  const clusterThresholdMultiplier = params.clusters?.thresholdMultiplier ?? 2;
-  const dlcPeriod = params.dlc?.dlcPeriod ?? 40; // <--- ДОБАВЛЕНО: Используем новый параметр
-  const pocLookback = params.dlc?.pocLookback ?? 5; // <--- ДОБАВЛЕНО: Используем новый параметр
+  const clusterMinVolumeThresholdMultiplier = params.clusters?.minVolumeThresholdMultiplier ?? 1.5;
+  const clusterConfirmationBars = params.clusters?.confirmationBars ?? 1;
+  const clusterDeltaThreshold = params.clusters?.deltaThreshold ?? 0.7;
 
-  logger.debug(`[ApplyStrategyLogic] Params: globalAtrPeriod=${globalAtrPeriod}, nweAtrPeriod=${nweAtrPeriod}, nweLookback=${nweLookbackPeriod}, nweMultiplier=${nweAtrMultiplier}, vpBins=${vpNumBins}, vpVA%=${vpVaPercentage}, avgVolPeriod=${avgVolPeriod}, clusterSrc=${clusterSource}, clusterMultiplier=${clusterThresholdMultiplier}, dlcPeriod=${dlcPeriod}, pocLookback=${pocLookback}`);
+  const dlcPeriod = params.dlc?.dlcPeriod ?? 40; 
+  const pocLookback = params.dlc?.pocLookback ?? 5; 
 
-  const atrValues = calculateATR(candles, globalAtrPeriod);
-  const nweValues = calculateNWE(candles, {
-    lookbackPeriod: nweLookbackPeriod,
-    atrPeriod: nweAtrPeriod,
-    atrMultiplier: nweAtrMultiplier,
-  });
+  logger.debug(`[ApplyStrategyLogic] Params: atrPeriodForRisk=${atrPeriodForRisk}, nweEnabled=${nweEnabled}, nweBandwidth=${nweBandwidth}, nweMultiplier=${nweMultiplier}, nweSource=${nweSource}, vpBins=${vpNumBins}, vpVA%=${vpVaPercentage}, avgVolPeriod=${avgVolPeriod}, clusterSrc=${clusterSource}, clusterMinVolMultiplier=${clusterMinVolumeThresholdMultiplier}, clusterConfirmBars=${clusterConfirmationBars}, clusterDeltaThreshold=${clusterDeltaThreshold}, dlcPeriod=${dlcPeriod}, pocLookback=${pocLookback}`);
+
+  const atrValues = calculateATR(candles, atrPeriodForRisk);
+  
+  let nweValues: NWEResultPoint[] = [];
+  if (nweEnabled) {
+    // Используем параметры, которые ожидает текущая реализация calculateNWE
+    // lookbackPeriod и atrPeriod для NWE могут потребовать уточнения для точного соответствия Pine.
+    // В Pine NWE `h` (bandwidth) и `mult` (multiplier) - ключевые. 
+    // `lookbackPeriod` в Pine NWE обычно большой (около 500), `atrPeriod` не используется напрямую NWE.
+    const nweCalcParams = {
+      lookbackPeriod: 500, // Временное значение, близкое к Pine NWE, если ваша функция его использует.
+      atrPeriod: atrPeriodForRisk, // Используем общий ATR период, если calculateNWE его ожидает.
+      atrMultiplier: nweMultiplier // Используем новый nweMultiplier из параметров
+    };
+    logger.debug('[ApplyStrategyLogic] Calling calculateNWE with params:', nweCalcParams);
+    nweValues = calculateNWE(candles, nweCalcParams);
+  } else {
+    // Если NWE отключен, создаем пустой массив с корректными полями NWEResultPoint
+    nweValues = candles.map(() => ({ nweUpper: null, nweLower: null }));
+  }
+
   const avgVolumeValues = calculateAvgVolume(candles, avgVolPeriod);
   const approxDeltaValues = calculateApproxDelta(candles);
   
@@ -221,74 +251,98 @@ export const applyStrategyLogic = (
       }
     }
     
-    let isVolumeCluster = false;
-    let volumeClusterStrength: number | undefined = undefined;
+    let isClusterSignal = false;
+    // volumeClusterStrength больше не используется напрямую в условиях входа Pine, но может быть полезен для логов
+    // let volumeClusterStrength: number | undefined = undefined; 
 
     if (clusterSource === 'volume' && avgVolume > 0 && candle.volume > 0) {
-      const threshold = avgVolume * clusterThresholdMultiplier;
+      const threshold = avgVolume * clusterMinVolumeThresholdMultiplier; // Используем новое имя параметра
       if (candle.volume > threshold) {
-        isVolumeCluster = true;
-        volumeClusterStrength = candle.volume / avgVolume;
-        // Логирование кластера (можно оставить или изменить)
-        // logger.debug(`[StrategyCandle-${index}] Volume Cluster DETECTED...`);
+        // isVolumeCluster = true; // переименовано в isClusterSignal или будет частью логики ниже
+        // volumeClusterStrength = candle.volume / avgVolume;
       }
     }
+    // TODO: Добавить логику для clusterSource === 'delta' с использованием approxDelta и clusterDeltaThreshold
+    
 
     // --- НАЧАЛО: Новые условия входа на основе Pine Script ---
     let entryConditionLong = false;
     let entryConditionShort = false;
 
     // NWE сигналы (аналогично Pine)
-    const nweBuySignal = nwePoint?.nweLower !== null && candle.close > (nwePoint?.nweLower ?? -Infinity);
-    const nweSellSignal = nwePoint?.nweUpper !== null && candle.close < (nwePoint?.nweUpper ?? Infinity);
+    // Убедимся, что nwePoint корректно обрабатывается, если NWE отключен (nweValues будет содержать nulls)
+    const currentNwePoint = nweValues[index];
+    const nweBuySignal = nweEnabled && currentNwePoint?.nweLower !== null && candle.close > (currentNwePoint?.nweLower ?? -Infinity);
+    const nweSellSignal = nweEnabled && currentNwePoint?.nweUpper !== null && candle.close < (currentNwePoint?.nweUpper ?? Infinity);
 
     // Кластерные сигналы с учетом VAH/VAL (аналогично Pine, bullish_cluster / bearish_cluster)
     // Pine: bullish_cluster = high_volume and delta > 0 and strong_delta and low < val_price and close > open
     // Pine: bearish_cluster = high_volume and delta < 0 and strong_delta and high > vah_price and close < open
-    // Для isVolumeCluster мы уже имеем high_volume. Добавим проверку дельты и VAH/VAL
-    // strong_delta не реализован напрямую, но isVolumeCluster уже подразумевает значимость.
-    // Мы можем упростить или добавить расчет strong_delta если потребуется.
     
-    const approxDeltaRatio = avgVolume > 0 ? Math.abs(approxDelta) / candle.volume : 0; // Простая аппроксимация delta_ratio
-    const strongDeltaThresholdPine = 0.7; // Из Pine
-    const isStrongDelta = approxDeltaRatio > strongDeltaThresholdPine;
+    // high_volume условие:
+    const isHighVolume = candle.volume > (avgVolume * clusterMinVolumeThresholdMultiplier);
+    // strong_delta условие (приблизительно):
+    // В Pine: delta_ratio = math.abs(delta) / volume; strong_delta = delta_ratio > delta_threshold
+    // У нас есть approxDelta. Если volume = 0, delta_ratio будет NaN или Infinity.
+    const deltaRatio = candle.volume !== 0 ? Math.abs(approxDelta) / candle.volume : 0;
+    const isStrongDelta = deltaRatio > clusterDeltaThreshold;
 
-    let bullishClusterSignal = false;
-    if (dynamicVal !== null && isVolumeCluster && approxDelta > 0 /*&& isStrongDelta*/ && candle.low < dynamicVal && candle.close > candle.open) {
-        bullishClusterSignal = true;
+    let bullishCluster = false;
+    if (dynamicVal !== null && pocDirection > 0) { // Добавлена проверка pocDirection > 0
+        bullishCluster = isHighVolume && approxDelta > 0 && isStrongDelta && candle.low < dynamicVal && candle.close > candle.open;
     }
 
-    let bearishClusterSignal = false;
-    if (dynamicVah !== null && isVolumeCluster && approxDelta < 0 /*&& isStrongDelta*/ && candle.high > dynamicVah && candle.close < candle.open) {
-        bearishClusterSignal = true;
+    let bearishCluster = false;
+    if (dynamicVah !== null && pocDirection < 0) { // Добавлена проверка pocDirection < 0
+        bearishCluster = isHighVolume && approxDelta < 0 && isStrongDelta && candle.high > dynamicVah && candle.close < candle.open;
     }
     
-    if (pocDirection > 0) { // Тренд вверх по POC
-      if (bullishClusterSignal || (nweBuySignal && (params.nwe?.lookbackPeriod ?? 0) > 0) ) { // Добавил условие, что NWE используется (lookbackPeriod > 0), как в Pine `use_nwe`
-        entryConditionLong = true;
-      }
-    } else if (pocDirection < 0) { // Тренд вниз по POC
-      if (bearishClusterSignal || (nweSellSignal && (params.nwe?.lookbackPeriod ?? 0) > 0) ) {
-        entryConditionShort = true;
-      }
+    // Подтверждение кластера (если confirmationBars > 0)
+    if (clusterConfirmationBars > 0 && index >= clusterConfirmationBars) {
+        let prevBullishCluster = true;
+        let prevBearishCluster = true;
+        for (let k = 1; k <= clusterConfirmationBars; k++) {
+            const prevCandleSignals = strategyCandles[index - k]; // Предполагаем, что strategyCandles содержит поля для кластеров
+            // TODO: Нужно будет добавить поля bullishClusterSignal / bearishClusterSignal в StrategyCandle
+            // и заполнять их перед этой проверкой, или пересчитывать условия кластера для предыдущих свечей здесь.
+            // Пока что эта логика не будет работать корректно без хранения сигналов кластера.
+            // Для упрощения, пока уберем эту сложную часть подтверждения и вернемся к ней.
+            // bullishCluster = bullishCluster && prevCandleSignals.isBullishClusterConfirmed; // Пример
+            // bearishCluster = bearishCluster && prevCandleSignals.isBearishClusterConfirmed; // Пример
+        }
+        // В Pine: bullish_reaction = bullish_cluster[1] and close > open 
+        // Это означает, что сам кластер был на предыдущей свече, а текущая свеча - реакция.
+        // Текущая логика `bullishCluster` и `bearishCluster` определяет кластер НА ТЕКУЩЕЙ свече.
+        // Нужно будет сдвинуть эту логику или проверку на 1 бар назад для соответствия `cluster[1]`
     }
-    // --- КОНЕЦ: Новые условия входа ---
+
+    // Условия для входа в позицию (Pine: (poc_direction > 0 and bullish_cluster) or (poc_direction > 0 and nwe_buy_signal))
+    if (pocDirection > 0 && (bullishCluster || nweBuySignal)) {
+      entryConditionLong = true;
+    }
+
+    // Pine: (poc_direction < 0 and bearish_cluster) or (poc_direction < 0 and nwe_sell_signal)
+    if (pocDirection < 0 && (bearishCluster || nweSellSignal)) {
+      entryConditionShort = true;
+    }
+
+    // --- КОНЕЦ: Новые условия входа --- 
 
     // Логирование для отладки динамического POC и условий
     if (dynamicPoc !== null && (index < dlcPeriod + 5 || index > candles.length - 5 || entryConditionLong || entryConditionShort)) {
-        logger.debug(`[Candle-${index}] Time: ${new Date(candle.timestamp).toISOString()}, DynPOC: ${dynamicPoc?.toFixed(2)}, DynVAH: ${dynamicVah?.toFixed(2)}, DynVAL: ${dynamicVal?.toFixed(2)}, POCDir: ${pocDirection}, BullClust: ${bullishClusterSignal}, BearClust: ${bearishClusterSignal}, NWELong: ${nweBuySignal}, NWEShort: ${nweSellSignal}, LongCond: ${entryConditionLong}, ShortCond: ${entryConditionShort}`);
+        logger.debug(`[Candle-${index}] Time: ${new Date(candle.timestamp).toISOString()}, DynPOC: ${dynamicPoc?.toFixed(2)}, DynVAH: ${dynamicVah?.toFixed(2)}, DynVAL: ${dynamicVal?.toFixed(2)}, POCDir: ${pocDirection}, BullClust: ${bullishCluster}, BearClust: ${bearishCluster}, NWELong: ${nweBuySignal}, NWEShort: ${nweSellSignal}, LongCond: ${entryConditionLong}, ShortCond: ${entryConditionShort}`);
     }
 
 
     strategyCandles.push({
       ...candle,
       atr: currentAtr,
-      nweUpper: nwePoint?.nweUpper,
-      nweLower: nwePoint?.nweLower,
+      nweUpper: currentNwePoint?.nweUpper, // Используем nweUpper
+      nweLower: currentNwePoint?.nweLower, // Используем nweLower
       avgVolume: avgVolume,
       approxDelta: approxDelta,
-      isVolumeCluster: isVolumeCluster, // Это все еще старый isVolumeCluster, нужно подумать, как его совместить с bullish/bearishClusterSignal
-      volumeClusterStrength: volumeClusterStrength,
+      isVolumeCluster: isClusterSignal, // Это все еще старый isVolumeCluster, нужно подумать, как его совместить с bullish/bearishClusterSignal
+      volumeClusterStrength: isClusterSignal ? 1 : undefined,
       // Можно добавить поля для динамического POC, VAH, VAL если нужно их видеть в каждой свече
       // dynamicPoc: dynamicPoc, 
       // dynamicVah: dynamicVah,
