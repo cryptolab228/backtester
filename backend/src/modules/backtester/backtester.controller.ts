@@ -5,6 +5,8 @@ import { CandleData } from '../../interfaces/marketData.interface'; // Испр�
 import { getDefaultStrategyParameters } from '../../config/defaultStrategyParameters'; // Исправленный путь
 import { dataService } from '../../services/dataService'; // <-- Импорт dataService
 import logger from '../../utils/logger'; // <-- Импорт logger
+import { dataQueue } from '../../config/queue'; // Исправленный импорт dataQueue
+import { JOB_TYPES } from '../../jobs/dataWorker'; // Исправленный импорт JOB_TYPES
 
 // Моковые данные свечей УДАЛЕНЫ
 
@@ -57,16 +59,63 @@ export const runBacktestHandler = async (req: Request, res: Response): Promise<v
         return;
     }
 
-    // Загрузка исторических данных
-    logger.info(`[BacktesterCtrl] Fetching candles for ${incomingParams.pairSymbol}, ${incomingParams.timeframe} from ${new Date(startTimestamp)} to ${new Date(endTimestamp)}`);
-    const candlesFromDB = await dataService.getCandles(incomingParams.pairSymbol, incomingParams.timeframe, startTimestamp, endTimestamp);
-
-    if (!candlesFromDB || candlesFromDB.length === 0) {
-      logger.warn(`[BacktesterCtrl] No candles found for ${incomingParams.pairSymbol} (${incomingParams.timeframe}) in the given range.`);
-      res.status(404).json({ message: `No candles found for ${incomingParams.pairSymbol} (${incomingParams.timeframe}) in the specified date range.` });
+    // 0. Проверяем существование торговой пары
+    const tradingPair = await dataService.getTradingPairBySymbol(incomingParams.pairSymbol);
+    if (!tradingPair) {
+      logger.warn(`[BacktesterCtrl] Trading pair ${incomingParams.pairSymbol} not found in DB. Cannot run backtest or fetch candles.`);
+      res.status(404).json({ message: `Trading pair ${incomingParams.pairSymbol} not found. Please add it first.` });
       return;
     }
-    logger.info(`[BacktesterCtrl] Fetched ${candlesFromDB.length} candles from DB.`);
+
+    // 1. Загрузка исторических данных
+    logger.info(`[BacktesterCtrl] Fetching candles for ${incomingParams.pairSymbol}, ${incomingParams.timeframe} from ${new Date(startTimestamp)} to ${new Date(endTimestamp)}`);
+    const candlesFromDB = await dataService.getCandles(incomingParams.pairSymbol, incomingParams.timeframe, startTimestamp, endTimestamp);
+    logger.info(`[BacktesterCtrl] Fetched ${candlesFromDB.length} candles from DB for ${incomingParams.pairSymbol} (${incomingParams.timeframe}).`);
+
+    // 2. Проверка достаточности данных и при необходимости инициирование загрузки
+    const firstCandleTime = candlesFromDB.length > 0 ? Number(candlesFromDB[0].timestamp) : null;
+    const lastCandleTime = candlesFromDB.length > 0 ? Number(candlesFromDB[candlesFromDB.length - 1].timestamp) : null;
+
+    // Определяем, нужно ли дозагружать данные
+    // Нужно, если:
+    // - свечей нет совсем
+    // - первая свеча позже запрашиваемого начала
+    // - последняя свеча раньше запрашиваемого конца
+    const needsFetching = candlesFromDB.length === 0 || 
+                          (firstCandleTime && firstCandleTime > startTimestamp) || 
+                          (lastCandleTime && lastCandleTime < endTimestamp);
+
+    if (needsFetching) {
+      logger.warn(`[BacktesterCtrl] Insufficient candle data for ${incomingParams.pairSymbol} (${incomingParams.timeframe}) in range. Attempting to queue a fetch job.`);
+      
+      const jobData = {
+        symbol: incomingParams.pairSymbol,
+        timeframe: incomingParams.timeframe,
+        // Запрашиваем весь диапазон, т.к. okxService сам определит, что уже есть, и загрузит недостающее (если сервис так умеет)
+        // Либо, если okxService не умеет так, то нужно будет передать ему только недостающие диапазоны.
+        // Для простоты пока запрашиваем весь диапазон.
+        startTime: startTimestamp,
+        endTime: endTimestamp,
+        // Добавляем параметры бэктеста, чтобы воркер мог запустить его после загрузки
+        backtestParams: { ...incomingParams, strategyParameters: strategyParamsToUse } 
+      };
+
+      try {
+        await dataQueue.add(JOB_TYPES.FETCH_CANDLES_AND_RUN_BACKTEST, jobData); // Используем новый тип задачи или передаем флаг
+        logger.info(`[BacktesterCtrl] Successfully queued job ${JOB_TYPES.FETCH_CANDLES_AND_RUN_BACKTEST} for ${incomingParams.pairSymbol} (${incomingParams.timeframe}).`);
+        res.status(202).json({ 
+          message: `Candle data for ${incomingParams.pairSymbol} (${incomingParams.timeframe}) is being fetched. Backtest will run automatically once data is ready.`,
+          jobDetails: { symbol: jobData.symbol, timeframe: jobData.timeframe, range: `${new Date(startTimestamp)} - ${new Date(endTimestamp)}` }
+        });
+      } catch (queueError: any) {
+        logger.error(`[BacktesterCtrl] Failed to queue fetch job for ${incomingParams.pairSymbol}: ${queueError.message}`, queueError);
+        res.status(500).json({ message: 'Failed to queue data fetching job. Please try again later.' });
+      }
+      return; // Завершаем обработку, так как данные будут загружены фоново
+    }
+
+    // Если дошли сюда, значит, свечи есть и их достаточно
+    logger.info(`[BacktesterCtrl] Sufficient candle data found in DB for ${incomingParams.pairSymbol} (${incomingParams.timeframe}). Proceeding with backtest.`);
 
     // Адаптация Candle[] (из DB) к CandleData[] (ожидаемому runBacktest)
     const candlesToBacktest: CandleData[] = candlesFromDB.map(c => ({

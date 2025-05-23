@@ -153,6 +153,25 @@ export class DataService {
     }
   }
 
+  /**
+   * Получает торговую пару по символу.
+   */
+  async getTradingPairBySymbol(symbol: string): Promise<TradingPair | null> {
+    logger.debug(`Fetching trading pair by symbol from DB: ${symbol}`);
+    try {
+      const pair = await this.pairRepository.findOne({ where: { symbol } });
+      if (pair) {
+        logger.debug(`Trading pair ${symbol} found in DB.`);
+      } else {
+        logger.debug(`Trading pair ${symbol} not found in DB.`);
+      }
+      return pair;
+    } catch (error) {
+      logger.error(`Error fetching trading pair ${symbol} from DB:`, error);
+      return null;
+    }
+  }
+
    // Можно добавить другие методы, например, для получения последней свечи и т.д.
 }
 

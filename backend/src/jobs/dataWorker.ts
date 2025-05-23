@@ -4,6 +4,9 @@ import { createWorker, DATA_QUEUE_NAME, dataQueue, broadcastJobCounts } from '@/
 import * as okxService from '@/services/okxService';
 import { dataService } from '@/services/dataService';
 import { broadcast } from '@/websocket';
+import { runBacktest } from '@/modules/backtester/backtester';
+import type { BacktestRunParameters } from '@/modules/backtester/backtester.types';
+import type { CandleData } from '@/interfaces/marketData.interface';
 
 // Интерфейсы для данных задач
 interface FetchPairsJobData {
@@ -19,12 +22,22 @@ interface FetchCandlesJobData {
   isUserPaused?: boolean;
 }
 
-type DataJobData = FetchPairsJobData | FetchCandlesJobData;
+interface FetchCandlesAndRunBacktestJobData {
+  symbol: string;
+  timeframe: string;
+  startTime: number;
+  endTime: number;
+  backtestParams: BacktestRunParameters;
+  isUserPaused?: boolean;
+}
+
+type DataJobData = FetchPairsJobData | FetchCandlesJobData | FetchCandlesAndRunBacktestJobData;
 
 // Константы для имен задач
 export const JOB_TYPES = {
   FETCH_PAIRS: 'fetch-pairs',
   FETCH_CANDLES: 'fetch-candles',
+  FETCH_CANDLES_AND_RUN_BACKTEST: 'fetch-candles-and-run-backtest',
 } as const;
 
 /**
@@ -77,6 +90,68 @@ const processFetchCandles = async (job: Job<FetchCandlesJobData>) => {
   }
 };
 
+// Обработчик для новой задачи FETCH_CANDLES_AND_RUN_BACKTEST
+const processFetchCandlesAndRunBacktest = async (job: Job<FetchCandlesAndRunBacktestJobData>) => {
+  const { symbol, timeframe, startTime, endTime, backtestParams } = job.data;
+  const jobId = job.id;
+  logger.info(`[Worker] Received job ${JOB_TYPES.FETCH_CANDLES_AND_RUN_BACKTEST} (ID: ${jobId}) for ${symbol} (${timeframe}).`);
+  logger.debug(`[Job ${jobId}] Backtest params:`, backtestParams);
+
+  try {
+    // 1. Загрузка свечей
+    logger.info(`[Job ${jobId}] Calling okxService.getHistoricalCandles for ${symbol} (${timeframe}) from ${new Date(startTime)} to ${new Date(endTime)}.`);
+    const candlesFromAPI = await okxService.getHistoricalCandles(symbol, timeframe, startTime, endTime);
+    logger.info(`[Job ${jobId}] Fetched ${candlesFromAPI.length} candles from API for ${symbol}.`);
+
+    // 2. Сохранение свечей
+    if (candlesFromAPI.length > 0) {
+      logger.info(`[Job ${jobId}] Calling dataService.saveCandles for ${symbol}.`);
+      await dataService.saveCandles(symbol, timeframe, candlesFromAPI);
+      logger.info(`[Job ${jobId}] Finished dataService.saveCandles for ${symbol}.`);
+    } else {
+      logger.warn(`[Job ${jobId}] No candles fetched from API for ${symbol}. Backtest might not have enough data.`);
+      // Можно решить, прерывать ли здесь, если свечей 0. Пока продолжим.
+    }
+
+    // 3. Получение свечей из БД для бэктеста (чтобы убедиться в их наличии и формате)
+    logger.info(`[Job ${jobId}] Fetching candles from DB for backtest: ${symbol} (${timeframe}) from ${new Date(startTime)} to ${new Date(endTime)}`);
+    const candlesFromDB = await dataService.getCandles(symbol, timeframe, startTime, endTime);
+    logger.info(`[Job ${jobId}] Fetched ${candlesFromDB.length} candles from DB for backtest.`);
+
+    if (!candlesFromDB || candlesFromDB.length === 0) {
+      logger.error(`[Job ${jobId}] No candles found in DB for ${symbol} (${timeframe}) in range after fetch. Cannot run backtest.`);
+      throw new Error(`No candles in DB for ${symbol} after fetch attempt.`);
+    }
+
+    // 4. Адаптация данных для бэктеста
+    const candlesToBacktest: CandleData[] = candlesFromDB.map(c => ({
+      timestamp: Number(c.timestamp),
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+      volume: c.volume,
+      // volumeQuote можно будет добавить, если он есть в Candle модели и нужен для бэктеста
+    }));
+    logger.info(`[Job ${jobId}] Prepared ${candlesToBacktest.length} candles for backtest execution.`);
+
+    // 5. Запуск бэктеста
+    logger.info(`[Job ${jobId}] Starting backtest for ${symbol} with params:`, backtestParams);
+    const backtestResult = await runBacktest(backtestParams, candlesToBacktest);
+    logger.info(`[Job ${jobId}] Backtest finished for ${symbol}. Trades: ${backtestResult.metrics.totalTrades}.`);
+    logger.debug(`[Job ${jobId}] Backtest result for ${symbol}:`, backtestResult);
+
+    // Здесь можно добавить логику сохранения результатов бэктеста или отправки уведомления
+    // Например, broadcast({ type: 'backtest_completed', jobId, result: backtestResult });
+
+    logger.info(`Finished job ${JOB_TYPES.FETCH_CANDLES_AND_RUN_BACKTEST} (ID: ${jobId}) successfully.`);
+
+  } catch (error: any) {
+    logger.error(`Error processing job ${JOB_TYPES.FETCH_CANDLES_AND_RUN_BACKTEST} (ID: ${jobId}) for ${symbol} (${timeframe}):`, error);
+    throw error; // Перебрасываем ошибку, чтобы задача была помечена как failed
+  }
+};
+
 // Главный процессор задач для очереди данных
 const dataProcessor = async (job: Job<DataJobData>) => {
   logger.debug(`[Worker] Picked up job ${job.name} (ID: ${job.id}).`); // Лог получения задачи воркером
@@ -104,6 +179,9 @@ const dataProcessor = async (job: Job<DataJobData>) => {
       break;
     case JOB_TYPES.FETCH_CANDLES:
       await processFetchCandles(job as Job<FetchCandlesJobData>);
+      break;
+    case JOB_TYPES.FETCH_CANDLES_AND_RUN_BACKTEST:
+      await processFetchCandlesAndRunBacktest(job as Job<FetchCandlesAndRunBacktestJobData>);
       break;
     default:
       logger.warn(`Unknown job type: ${job.name}`);
