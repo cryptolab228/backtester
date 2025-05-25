@@ -141,13 +141,39 @@ const processFetchCandlesAndRunBacktest = async (job: Job<FetchCandlesAndRunBack
     logger.info(`[Job ${jobId}] Backtest finished for ${symbol}. Trades: ${backtestResult.metrics.totalTrades}.`);
     logger.debug(`[Job ${jobId}] Backtest result for ${symbol}:`, backtestResult);
 
-    // Здесь можно добавить логику сохранения результатов бэктеста или отправки уведомления
-    // Например, broadcast({ type: 'backtest_completed', jobId, result: backtestResult });
+    // Отправляем результат через WebSocket
+    broadcast({
+      type: 'BACKTEST_COMPLETED',
+      payload: {
+        jobId,
+        symbol,
+        timeframe,
+        backtestParams, // Исходные параметры, с которыми запускался
+        result: backtestResult
+      }
+    });
+    logger.info(`[Job ${jobId}] Broadcasted BACKTEST_COMPLETED event.`);
 
     logger.info(`Finished job ${JOB_TYPES.FETCH_CANDLES_AND_RUN_BACKTEST} (ID: ${jobId}) successfully.`);
 
   } catch (error: any) {
     logger.error(`Error processing job ${JOB_TYPES.FETCH_CANDLES_AND_RUN_BACKTEST} (ID: ${jobId}) for ${symbol} (${timeframe}):`, error);
+    // Отправляем уведомление об ошибке через WebSocket
+    broadcast({
+      type: 'BACKTEST_FAILED',
+      payload: {
+        jobId,
+        symbol,
+        timeframe,
+        backtestParams,
+        error: { 
+          message: error.message,
+          // Можно добавить и другие детали ошибки, если это безопасно и полезно для фронтенда
+          // stack: error.stack // Не рекомендуется слать полный stacktrace на фронтенд
+        }
+      }
+    });
+    logger.info(`[Job ${jobId}] Broadcasted BACKTEST_FAILED event.`);
     throw error; // Перебрасываем ошибку, чтобы задача была помечена как failed
   }
 };

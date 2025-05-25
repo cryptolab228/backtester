@@ -217,7 +217,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue';
+import { ref, onMounted, watch, onUnmounted } from 'vue';
 import { storeToRefs } from 'pinia';
 import Panel from 'primevue/panel';
 import Button from 'primevue/button';
@@ -228,7 +228,7 @@ import TabPanel from 'primevue/tabpanel';
 import StrategySettingsForm from '@/components/StrategySettingsForm.vue';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useBacktestStore } from '@/stores/backtestStore';
-import type { BacktestRunParameters } from '@/types/strategy';
+import type { BacktestRunParameters, BacktestResult } from '@/types/strategy';
 import { useToast } from "primevue/usetoast";
 import Dropdown from 'primevue/dropdown';
 import Calendar from 'primevue/calendar';
@@ -247,9 +247,23 @@ const { fetchAvailableTradingPairs } = settingsStore;
 
 const { isLoading: backtestIsLoading, results: backtestResultsStore, error: backtestError } = storeToRefs(backtestStore);
 
+const BACKTESTER_PARAMS_KEY = 'backtester_launch_params';
+const BACKTESTER_RESULTS_KEY = 'backtester_last_results';
+const pendingJobId = ref<string | null>(null);
+
 let debounceTimer: number | undefined = undefined;
 
-const pairSymbol = ref<string>('BTC-USDT-SWAP');
+// WebSocket相关
+let websocket: WebSocket | null = null;
+const WEBSOCKET_URL = 'ws://localhost:5000'; // Используем тот же URL, что и в QueueManagerView
+// Для логгирования, если глобальный logger недоступен
+const logger = console; 
+
+const JOB_TYPES_FRONTEND = {
+  FETCH_CANDLES_AND_RUN_BACKTEST: 'fetch-candles-and-run-backtest'
+};
+
+const pairSymbol = ref<string | null>(null); // Инициализация по умолчанию или из localStorage
 const timeframe = ref<string>('1h');
 const timeframes = ref([
     { label: '1 минута', value: '1m' },
@@ -268,14 +282,158 @@ const startDate = ref<Date | null>(null);
 const endDate = ref<Date | null>(null);
 const initialCapital = ref<number>(10000);
 
+
+const handleWebSocketMessage = (event: MessageEvent) => {
+  try {
+    const message = JSON.parse(event.data as string);
+    logger.debug('[BacktesterView] WebSocket message received:', message);
+
+    if (message.type === 'BACKTEST_COMPLETED' && message.payload) {
+      const { jobId: completedJobId, result, symbol: msgSymbol, timeframe: msgTimeframe } = message.payload;
+      
+      // Если у нас есть pendingJobId, мы можем проверить, соответствует ли он
+      if (pendingJobId.value && pendingJobId.value !== completedJobId) {
+        logger.info(`[BacktesterView] Received BACKTEST_COMPLETED for job ${completedJobId}, but was expecting ${pendingJobId.value}. It might be an older job or a job from another session/tab if not handled carefully.`);
+        // В простом случае, если активен только один отложенный бектест, можно не игнорировать, а просто обновить.
+        // Если предполагается несколько одновременных, то проверка по jobId важна.
+      }
+      
+      logger.info(`[BacktesterView] Backtest (Job ID: ${completedJobId}) completed for ${msgSymbol} (${msgTimeframe}). Updating results.`);
+      backtestStore.results = result as BacktestResult;
+      backtestStore.error = null;
+      backtestStore.isLoading = false;
+      if (pendingJobId.value === completedJobId) {
+         pendingJobId.value = null;
+         backtestStore.clearCurrentAbortController();
+      }
+
+      localStorage.setItem(BACKTESTER_RESULTS_KEY, JSON.stringify(result));
+
+      toast.add({ 
+        severity: 'success', 
+        summary: 'Бектест Завершен', 
+        detail: `Бектест для ${msgSymbol} (${msgTimeframe}) успешно завершен.`, 
+        life: 5000 
+      });
+
+    } else if (message.type === 'BACKTEST_FAILED' && message.payload) {
+      const { jobId: failedJobId, symbol: msgSymbol, timeframe: msgTimeframe, error: errPayload } = message.payload;
+      if (pendingJobId.value && pendingJobId.value !== failedJobId) {
+        logger.info(`[BacktesterView] Received BACKTEST_FAILED for job ${failedJobId}, but was expecting ${pendingJobId.value}.`);
+      }
+
+      logger.error(`[BacktesterView] Backtest (Job ID: ${failedJobId}) failed for ${msgSymbol} (${msgTimeframe}):`, errPayload.message);
+      backtestStore.error = errPayload.message || 'Неизвестная ошибка при выполнении бектеста в очереди.';
+      backtestStore.isLoading = false;
+      if (pendingJobId.value === failedJobId) {
+        pendingJobId.value = null;
+        backtestStore.clearCurrentAbortController();
+      }
+
+      toast.add({ 
+        severity: 'error',
+        summary: 'Ошибка Бектеста',
+        detail: `Ошибка при выполнении бектеста для ${msgSymbol} (${msgTimeframe}) в очереди: ${errPayload.message}`,
+        life: 7000
+      });
+    } else if (message.type === 'job_updated' && message.payload?.name === JOB_TYPES_FRONTEND.FETCH_CANDLES_AND_RUN_BACKTEST) {
+        if(message.payload.jobId === pendingJobId.value && message.payload.status === 'active'){
+            toast.add({ 
+                severity: 'info', 
+                summary: 'Обработка Задачи', 
+                detail: `Задача на бектест для ${message.payload.data?.symbol} (${message.payload.data?.timeframe}) начала выполняться.`, 
+                life: 3000 
+            });
+        }
+    }
+  } catch (e) {
+    logger.error('[BacktesterView] Error parsing WebSocket message or processing it:', e);
+  }
+};
+
+const connectWebSocket = () => {
+  if (websocket && websocket.readyState === WebSocket.OPEN) {
+    logger.info('[BacktesterView] WebSocket already connected.');
+    return;
+  }
+  logger.info('[BacktesterView] Attempting to connect WebSocket...');
+  websocket = new WebSocket(WEBSOCKET_URL);
+
+  websocket.onopen = () => {
+    logger.info('[BacktesterView] WebSocket connection established.');
+    toast.add({ severity: 'info', summary: 'WebSocket', detail: 'Соединение для обновлений установлено.', life: 2000 });
+  };
+
+  websocket.onmessage = handleWebSocketMessage;
+
+  websocket.onerror = (error) => {
+    logger.error('[BacktesterView] WebSocket error:', error);
+    toast.add({ severity: 'error', summary: 'WebSocket Ошибка', detail: 'Ошибка соединения WebSocket.', life: 4000 });
+  };
+
+  websocket.onclose = (event) => {
+    logger.info('[BacktesterView] WebSocket connection closed:', event.reason, `Code: ${event.code}`);
+    if (!event.wasClean) {
+        toast.add({ severity: 'warn', summary: 'WebSocket', detail: 'Соединение для обновлений потеряно. Попытка переподключения через 5с...', life: 4000 });
+        // Простое переподключение через 5 секунд
+        setTimeout(connectWebSocket, 5000);
+    }
+  };
+};
+
+const closeWebSocket = () => {
+  if (websocket) {
+    logger.info('[BacktesterView] Closing WebSocket connection.');
+    websocket.close();
+    websocket = null;
+  }
+};
+
 onMounted(async () => {
-  const today = new Date();
-  const threeMonthsAgo = new Date();
-  threeMonthsAgo.setMonth(today.getMonth() - 3);
-  if (!startDate.value) startDate.value = threeMonthsAgo;
-  if (!endDate.value) endDate.value = today;
-  
   await fetchAvailableTradingPairs();
+  // settingsStore.loadParameters(); // Закомментировано, так как такого action нет
+  // Если параметры инициализируются в самом сторе или через другой action, этот вызов может не требоваться
+  // или его нужно заменить на правильный (например, settingsStore.fetchAndSetParameters() или подобное, если есть)
+  if (!localStrategyParams.value) { // Если параметры не загружены (например, при первой загрузке)
+      // Возможно, здесь нужно вызвать метод, который действительно загружает/инициализирует параметры в settingsStore
+      // settingsStore.initDefaultParameters(); // Пример
+      logger.warn('[BacktesterView] localStrategyParams are null onMounted after attempting to load. Ensure settingsStore initializes them.');
+  }
+
+  const savedParamsRaw = localStorage.getItem(BACKTESTER_PARAMS_KEY);
+  if (savedParamsRaw) {
+    try {
+      const savedParams = JSON.parse(savedParamsRaw);
+      pairSymbol.value = savedParams.pairSymbol || null;
+      timeframe.value = savedParams.timeframe || '1h';
+      startDate.value = savedParams.startDate ? new Date(savedParams.startDate) : null;
+      endDate.value = savedParams.endDate ? new Date(savedParams.endDate) : null;
+      initialCapital.value = savedParams.initialCapital || 10000;
+      logger.info('[BacktesterView] Loaded launch parameters (symbol, timeframe, dates, capital) from localStorage.');
+    } catch (e) {
+      logger.error('[BacktesterView] Failed to parse launch parameters from localStorage:', e);
+      localStorage.removeItem(BACKTESTER_PARAMS_KEY);
+    }
+  }
+
+  const savedResultsRaw = localStorage.getItem(BACKTESTER_RESULTS_KEY);
+  if (savedResultsRaw) {
+    try {
+      const savedResults = JSON.parse(savedResultsRaw);
+      backtestStore.results = savedResults as BacktestResult;
+      logger.info('[BacktesterView] Loaded last backtest results from localStorage.');
+    } catch (e) {
+      logger.error('[BacktesterView] Failed to parse backtest results from localStorage:', e);
+      localStorage.removeItem(BACKTESTER_RESULTS_KEY);
+    }
+  }
+  connectWebSocket();
+});
+
+onUnmounted(() => {
+  if (debounceTimer) clearTimeout(debounceTimer);
+  closeWebSocket();
+  logger.info('[BacktesterView] Cleaned up on unmount.');
 });
 
 watch(localStrategyParams, (newValue) => {
@@ -294,30 +452,100 @@ const startBacktest = async () => {
     toast.add({ severity: 'error', summary: 'Ошибка', detail: 'Параметры стратегии не установлены!', life: 3000 });
     return;
   }
-  if (!pairSymbol.value || !timeframe.value || !startDate.value || !endDate.value || initialCapital.value === null) {
-    toast.add({ severity: 'error', summary: 'Ошибка', detail: 'Не все параметры для запуска бектеста заполнены!', life: 3000 });
+  if (!pairSymbol.value || !timeframe.value || !startDate.value || !endDate.value || initialCapital.value === null || initialCapital.value <= 0) {
+    toast.add({ severity: 'error', summary: 'Ошибка', detail: 'Не все параметры для запуска бектеста заполнены корректно (проверьте символ, даты, капитал > 0)!', life: 4000 });
     return;
   }
 
   const runParams: BacktestRunParameters = {
     pairSymbol: pairSymbol.value,
     timeframe: timeframe.value,
-    startDate: startDate.value.toISOString(),
-    endDate: endDate.value.toISOString(),
+    startDate: startDate.value.toISOString().split('T')[0], // Отправляем только дату YYYY-MM-DD
+    endDate: endDate.value.toISOString().split('T')[0],     // Отправляем только дату YYYY-MM-DD
     initialCapital: initialCapital.value,
-    strategyParameters: JSON.parse(JSON.stringify(localStrategyParams.value)),
+    strategyParameters: JSON.parse(JSON.stringify(localStrategyParams.value)), // Глубокая копия
   };
 
-  console.log('Запуск бектеста с параметрами:', runParams);
-  toast.add({ severity: 'info', summary: 'Запуск', detail: 'Бектест запускается...', life: 2000 });
-  
-  await backtestStore.runBacktest(runParams);
+  // Сохраняем параметры запуска в localStorage
+  const paramsToStore = {
+      pairSymbol: runParams.pairSymbol,
+      timeframe: runParams.timeframe,
+      startDate: runParams.startDate, // уже в ISOString (date part)
+      endDate: runParams.endDate, // уже в ISOString (date part)
+      initialCapital: runParams.initialCapital,
+      strategyParameters: runParams.strategyParameters // уже копия
+  };
+  localStorage.setItem(BACKTESTER_PARAMS_KEY, JSON.stringify(paramsToStore));
+  logger.info('[BacktesterView] Saved launch parameters to localStorage.');
 
-  if (backtestError.value) {
-     toast.add({ severity: 'error', summary: 'Ошибка бектеста', detail: backtestError.value || 'Произошла ошибка при выполнении бектеста.', life: 5000 });
-  } else if (backtestResultsStore.value) {
-     toast.add({ severity: 'success', summary: 'Завершено', detail: 'Бектест успешно выполнен!', life: 3000 });
-     console.log('Бектест завершен, результаты:', backtestResultsStore.value);
+  toast.add({ severity: 'info', summary: 'Запуск Бектеста', detail: 'Инициация процесса бектестинга...', life: 3000 });
+  pendingJobId.value = null;
+  backtestStore.isLoading = true;
+  backtestStore.error = null;
+  backtestStore.results = null;
+
+  try {
+    const response = await backtestStore.runBacktest(runParams);
+    logger.info('[BacktesterView] Response from backtestStore.runBacktest:', JSON.parse(JSON.stringify(response))); // Логируем весь ответ
+
+    if (response && response.status === 202) { // Бэктест поставлен в очередь
+      pendingJobId.value = response.data?.jobDetails?.jobId || response.data?.jobIds?.[0] || null;
+      toast.add({
+        severity: 'info',
+        summary: 'Бектест в Очереди',
+        detail: response.data?.message || 'Бектест поставлен в очередь и будет выполнен фоново.',
+        life: 5000
+      });
+      logger.info(`[BacktesterView] Backtest queued. Job ID (if available from response): ${pendingJobId.value}. Response data:`, JSON.parse(JSON.stringify(response.data)));
+      // isLoading остается true, пока не придет сообщение по WebSocket
+    } else if (response && response.status === 200) { // Бэктест выполнен немедленно
+      logger.info('[BacktesterView] Backtest completed immediately. Raw response.data:', JSON.parse(JSON.stringify(response.data)));
+      backtestStore.results = response.data as BacktestResult;
+      logger.info('[BacktesterView] backtestStore.results after assignment:', JSON.parse(JSON.stringify(backtestStore.results)));
+      backtestStore.isLoading = false;
+      localStorage.setItem(BACKTESTER_RESULTS_KEY, JSON.stringify(response.data));
+      toast.add({ severity: 'success', summary: 'Завершено', detail: 'Бектест успешно выполнен немедленно!', life: 3000 });
+      backtestStore.clearCurrentAbortController();
+    } else {
+        logger.warn('[BacktesterView] Backtest run did not return a 200 or 202 status, or response was unexpected:', response);
+        backtestStore.isLoading = false;
+        let detailMessage = 'Получен неожиданный ответ от сервера.';
+        if (response && response.data && typeof response.data === 'string') { // Если data - это просто строка
+            detailMessage = response.data;
+        } else if (response && response.data?.message) {
+            detailMessage = response.data.message;
+        } else if (response && response.status) {
+            detailMessage = `Сервер вернул статус ${response.status}.`;
+        }
+        
+        backtestStore.error = detailMessage;
+        toast.add({ severity: 'error', summary: 'Ошибка Сервера', detail: detailMessage, life: 7000 });
+    }
+
+  } catch (error: any) {
+    logger.error('[BacktesterView] Error calling backtestStore.runBacktest:', error);
+    backtestStore.isLoading = false;
+    let errorMessage = 'Произошла ошибка при запуске бектеста.';
+    let errorSummary = 'Ошибка Запуска';
+
+    if (error.name === 'AbortError') {
+        errorMessage = 'Бектест был отменен.';
+        errorSummary = 'Отменено';
+    } else if (error.response && error.response.data) { // Ошибка от Axios с data
+      if (typeof error.response.data === 'string') {
+        errorMessage = error.response.data;
+      } else if (error.response.data.message) {
+        errorMessage = error.response.data.message;
+      }
+      errorSummary = `Ошибка ${error.response.status || 'Сервера'}`;
+      backtestStore.clearCurrentAbortController();
+    } else if (error.message) { // Другие ошибки (сетевые, и т.д.)
+        errorMessage = error.message;
+        backtestStore.clearCurrentAbortController();
+    }
+    
+    backtestStore.error = errorMessage;
+    toast.add({ severity: 'error', summary: errorSummary, detail: errorMessage, life: 7000 });
   }
 };
 

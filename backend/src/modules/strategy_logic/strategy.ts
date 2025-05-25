@@ -105,7 +105,7 @@ export const DefaultStrategyParameters: StrategyParameters = {
     trailingStopOffsetMultiplier: 2.0, // Pine: trail_offset_mult
     trailingStopStepMultiplier: 1.0, // Pine: trailing_step (ATR множитель для шага)
     maxTradesPerDay: 2, // Pine: max_trades_per_day
-    maxRiskPerTradePercentage: 0.01, // Остается для доп. контроля
+    maxRiskPerTradePercentage: 0.02, // ИЗМЕНЕНО с 0.01 на 0.02 для соответствия positionSizePercentage
   },
   // globalAtrPeriod и avgVolumePeriod удалены
 };
@@ -170,7 +170,7 @@ export const applyStrategyLogic = (
   const dlcPeriod = params.dlc?.dlcPeriod ?? 40; 
   const pocLookback = params.dlc?.pocLookback ?? 5; 
 
-  logger.debug(`[ApplyStrategyLogic] Params: atrPeriodForRisk=${atrPeriodForRisk}, nweEnabled=${nweEnabled}, nweBandwidth=${nweBandwidth}, nweMultiplier=${nweMultiplier}, nweSource=${nweSource}, vpBins=${vpNumBins}, vpVA%=${vpVaPercentage}, avgVolPeriod=${avgVolPeriod}, clusterSrc=${clusterSource}, clusterMinVolMultiplier=${clusterMinVolumeThresholdMultiplier}, clusterConfirmBars=${clusterConfirmationBars}, clusterDeltaThreshold=${clusterDeltaThreshold}, dlcPeriod=${dlcPeriod}, pocLookback=${pocLookback}`);
+  // logger.debug(`[ApplyStrategyLogic] Params: atrPeriodForRisk=${atrPeriodForRisk}, nweEnabled=${nweEnabled}, nweBandwidth=${nweBandwidth}, nweMultiplier=${nweMultiplier}, nweSource=${nweSource}, vpBins=${vpNumBins}, vpVA%=${vpVaPercentage}, avgVolPeriod=${avgVolPeriod}, clusterSrc=${clusterSource}, clusterMinVolMultiplier=${clusterMinVolumeThresholdMultiplier}, clusterConfirmBars=${clusterConfirmationBars}, clusterDeltaThreshold=${clusterDeltaThreshold}, dlcPeriod=${dlcPeriod}, pocLookback=${pocLookback}`);
 
   const atrValues = calculateATR(candles, atrPeriodForRisk);
   
@@ -185,7 +185,7 @@ export const applyStrategyLogic = (
       atrPeriod: atrPeriodForRisk, // Используем общий ATR период, если calculateNWE его ожидает.
       atrMultiplier: nweMultiplier // Используем новый nweMultiplier из параметров
     };
-    logger.debug('[ApplyStrategyLogic] Calling calculateNWE with params:', nweCalcParams);
+    // logger.debug('[ApplyStrategyLogic] Calling calculateNWE with params:', nweCalcParams);
     nweValues = calculateNWE(candles, nweCalcParams);
   } else {
     // Если NWE отключен, создаем пустой массив с корректными полями NWEResultPoint
@@ -203,7 +203,7 @@ export const applyStrategyLogic = (
       if (candles[k].low < minSliceLow) minSliceLow = candles[k].low;
       if (candles[k].high > maxSliceHigh) maxSliceHigh = candles[k].high;
     }
-    logger.debug(`[ApplyStrategyLogic] Before calling calculateVolumeProfile for the entire dataset (${candles.length} candles): MinLow=${minSliceLow}, MaxHigh=${maxSliceHigh}`);
+    // logger.debug(`[ApplyStrategyLogic] Before calling calculateVolumeProfile for the entire dataset (${candles.length} candles): MinLow=${minSliceLow}, MaxHigh=${maxSliceHigh}`);
     if (minSliceLow > maxSliceHigh) {
         logger.error(`[ApplyStrategyLogic] ANOMALY DETECTED in full dataset before VP: minLow (${minSliceLow}) > maxHigh (${maxSliceHigh}).`);
     }
@@ -330,7 +330,7 @@ export const applyStrategyLogic = (
 
     // Логирование для отладки динамического POC и условий
     if (dynamicPoc !== null && (index < dlcPeriod + 5 || index > candles.length - 5 || entryConditionLong || entryConditionShort)) {
-        logger.debug(`[Candle-${index}] Time: ${new Date(candle.timestamp).toISOString()}, DynPOC: ${dynamicPoc?.toFixed(2)}, DynVAH: ${dynamicVah?.toFixed(2)}, DynVAL: ${dynamicVal?.toFixed(2)}, POCDir: ${pocDirection}, BullClust: ${bullishCluster}, BearClust: ${bearishCluster}, NWELong: ${nweBuySignal}, NWEShort: ${nweSellSignal}, LongCond: ${entryConditionLong}, ShortCond: ${entryConditionShort}`);
+        // logger.debug(`[Candle-${index}] Time: ${new Date(candle.timestamp).toISOString()}, DynPOC: ${dynamicPoc?.toFixed(2)}, DynVAH: ${dynamicVah?.toFixed(2)}, DynVAL: ${dynamicVal?.toFixed(2)}, POCDir: ${pocDirection}, BullClust: ${bullishCluster}, BearClust: ${bearishCluster}, NWELong: ${nweBuySignal}, NWEShort: ${nweSellSignal}, LongCond: ${entryConditionLong}, ShortCond: ${entryConditionShort}`);
     }
 
 

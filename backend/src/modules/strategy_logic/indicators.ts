@@ -69,7 +69,7 @@ export const calculateVolumeProfile = (
   numBins: number = 20, // Количество ценовых уровней (корзин) в профиле
   vaPercentage: number = 0.7 // Процент для расчета Value Area (области стоимости)
 ): VolumeProfileResult => {
-  logger.debug(`[CalcVP] Called with ${candles?.length} candles, numBins: ${numBins}, vaPercentage: ${vaPercentage}`);
+  // logger.debug(`[CalcVP] Called with ${candles?.length} candles, numBins: ${numBins}, vaPercentage: ${vaPercentage}`);
   const result: VolumeProfileResult = {
     poc: null,
     vah: null,
@@ -93,7 +93,7 @@ export const calculateVolumeProfile = (
     totalVolumeFromCandles += candle.volume;
   }
   result.totalVolume = totalVolumeFromCandles;
-  logger.debug(`[CalcVP] minOverallLow: ${minOverallLow}, maxOverallHigh: ${maxOverallHigh}, totalVolumeFromCandles: ${totalVolumeFromCandles}`);
+  // logger.debug(`[CalcVP] minOverallLow: ${minOverallLow}, maxOverallHigh: ${maxOverallHigh}, totalVolumeFromCandles: ${totalVolumeFromCandles}`);
 
   // Новое логирование для аномальных срезов
   if (typeof minOverallLow === 'number' && typeof maxOverallHigh === 'number' && minOverallLow > maxOverallHigh) {
@@ -126,12 +126,12 @@ export const calculateVolumeProfile = (
     result.vah = minOverallLow;
     result.val = minOverallLow;
     result.profile.push({ price: minOverallLow, volume: result.totalVolume });
-    logger.debug('[CalcVP] Profile for identical prices:', result);
+    // logger.debug('[CalcVP] Profile for identical prices:', result);
     return result;
   }
 
   const binSize = (maxOverallHigh - minOverallLow) / numBins;
-  logger.debug(`[CalcVP] Calculated binSize: ${binSize}`);
+  // logger.debug(`[CalcVP] Calculated binSize: ${binSize}`);
   if (binSize <= 0) {
     logger.error(`[CalcVP] binSize is ${binSize}. This should not happen if minOverallLow !== maxOverallHigh. Defaulting to failsafe.`);
     // Failsafe, though the previous check minOverallLow === maxOverallHigh should catch this.
@@ -152,7 +152,7 @@ export const calculateVolumeProfile = (
   }
   
   if (bins.length > 0) {
-    logger.debug(`[CalcVP] First bin: price=${bins[0].price.toFixed(4)}, midPrice=${bins[0].midPrice.toFixed(4)}. Last bin: price=${bins[bins.length-1].price.toFixed(4)}, midPrice=${bins[bins.length-1].midPrice.toFixed(4)}`);
+    // logger.debug(`[CalcVP] First bin: price=${bins[0].price.toFixed(4)}, midPrice=${bins[0].midPrice.toFixed(4)}. Last bin: price=${bins[bins.length-1].price.toFixed(4)}, midPrice=${bins[bins.length-1].midPrice.toFixed(4)}`);
   }
 
 
@@ -168,7 +168,7 @@ export const calculateVolumeProfile = (
         bins[targetBinIndex].volume += candle.volume;
         // Log for a few candles to see distribution
         if (i < 3 || i > candles.length - 4) {
-            logger.debug(`[CalcVP-DistCandle-${i}] TypicalPrice: ${candleTypicalPrice.toFixed(4)}, Volume: ${candle.volume}, TargetBinIndex: ${targetBinIndex}, BinMidPrice: ${bins[targetBinIndex].midPrice.toFixed(4)}, BinVolumeAfter: ${bins[targetBinIndex].volume}`);
+            // logger.debug(`[CalcVP-DistCandle-${i}] TypicalPrice: ${candleTypicalPrice.toFixed(4)}, Volume: ${candle.volume}, TargetBinIndex: ${targetBinIndex}, BinMidPrice: ${bins[targetBinIndex].midPrice.toFixed(4)}, BinVolumeAfter: ${bins[targetBinIndex].volume}`);
         }
     } else {
         logger.warn(`[CalcVP-DistCandle-${i}] No target bin for index ${targetBinIndex}! TypicalPrice: ${candleTypicalPrice.toFixed(4)}`);
@@ -177,13 +177,13 @@ export const calculateVolumeProfile = (
   
   // Log total volume in bins
   const totalVolumeInBins = bins.reduce((acc, b) => acc + b.volume, 0);
-  logger.debug(`[CalcVP] Total volume from candles: ${totalVolumeFromCandles}. Total volume distributed in bins: ${totalVolumeInBins}`);
+  // logger.debug(`[CalcVP] Total volume from candles: ${totalVolumeFromCandles}. Total volume distributed in bins: ${totalVolumeInBins}`);
   if (Math.abs(totalVolumeFromCandles - totalVolumeInBins) > 1e-6) { // Check for significant discrepancy
       logger.warn(`[CalcVP] Discrepancy between total candle volume and total volume in bins!`);
   }
 
   result.profile = bins.map(b => ({ price: b.midPrice, volume: b.volume })).filter(b => b.volume > 0);
-  logger.debug(`[CalcVP] Profile after mapping and filtering zero volume bins. Profile length: ${result.profile.length}`);
+  // logger.debug(`[CalcVP] Profile after mapping and filtering zero volume bins. Profile length: ${result.profile.length}`);
   
   if (result.profile.length === 0 && result.totalVolume > 0 && minOverallLow === maxOverallHigh) {
       logger.info('[CalcVP] Readjusting profile for single price point (already handled, but as a fallback log).');
@@ -202,13 +202,13 @@ export const calculateVolumeProfile = (
       result.poc = point.price;
     }
   }
-  logger.debug(`[CalcVP] POC calculated: Price=${result.poc}, Volume=${maxVolume}`);
+  // logger.debug(`[CalcVP] POC calculated: Price=${result.poc}, Volume=${maxVolume}`);
 
   const sortedByVolume = [...result.profile].sort((a, b) => b.volume - a.volume);
   let volumeForVA = 0;
   const vaThreshold = result.totalVolume * vaPercentage;
   const pricesInVA: number[] = [];
-  logger.debug(`[CalcVP] Calculating VA. Threshold: ${vaThreshold.toFixed(2)} (totalVolume: ${result.totalVolume}, vaPercentage: ${vaPercentage})`);
+  // logger.debug(`[CalcVP] Calculating VA. Threshold: ${vaThreshold.toFixed(2)} (totalVolume: ${result.totalVolume}, vaPercentage: ${vaPercentage})`);
 
   for (const point of sortedByVolume) {
     if (volumeForVA >= vaThreshold && pricesInVA.length > 0) break;
@@ -216,10 +216,10 @@ export const calculateVolumeProfile = (
     pricesInVA.push(point.price);
     // Log first few points added to VA
     if (pricesInVA.length <= 3) {
-        logger.debug(`[CalcVP-VAcalc] Added to VA: Price=${point.price.toFixed(4)}, Volume=${point.volume}. volumeForVA_now=${volumeForVA.toFixed(2)}`);
+        // logger.debug(`[CalcVP-VAcalc] Added to VA: Price=${point.price.toFixed(4)}, Volume=${point.volume}. volumeForVA_now=${volumeForVA.toFixed(2)}`);
     }
     if (volumeForVA >= vaThreshold && pricesInVA.length > 0) {
-        logger.debug(`[CalcVP-VAcalc] VA threshold reached. volumeForVA=${volumeForVA.toFixed(2)}, pricesInVA count=${pricesInVA.length}`);
+        // logger.debug(`[CalcVP-VAcalc] VA threshold reached. volumeForVA=${volumeForVA.toFixed(2)}, pricesInVA count=${pricesInVA.length}`);
         break;
     }
   }
@@ -227,7 +227,7 @@ export const calculateVolumeProfile = (
   if (pricesInVA.length > 0) {
     result.vah = Math.max(...pricesInVA);
     result.val = Math.min(...pricesInVA);
-    logger.debug(`[CalcVP] VAH: ${result.vah}, VAL: ${result.val}`);
+    // logger.debug(`[CalcVP] VAH: ${result.vah}, VAL: ${result.val}`);
   } else if (result.profile.length > 0) { 
       logger.warn('[CalcVP] pricesInVA is empty, but profile has data. Setting VAH/VAL to first profile point.');
       result.vah = result.profile[0].price;
@@ -243,7 +243,7 @@ export const calculateVolumeProfile = (
       result.val = result.profile[0].price;
   }
   
-  logger.debug('[CalcVP] Final result:', JSON.stringify(result, null, 2));
+  // logger.debug('[CalcVP] Final result:', JSON.stringify(result, null, 2));
   return result;
 };
 

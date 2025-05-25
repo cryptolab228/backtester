@@ -142,8 +142,8 @@ export async function getFuturesPairs(): Promise<TradingPairInfo[]> {
 export async function getHistoricalCandles(
   symbol: string,
   timeframe: string,
-  startTime?: number,
-  endTime?: number,
+  startTime?: number, // inclusive start
+  endTime?: number,   // inclusive end (время открытия последней желаемой свечи)
   limit?: number
 ): Promise<CandleData[]> {
   const okxTimeframe = TIMEFRAME_MAP[timeframe];
@@ -153,11 +153,14 @@ export async function getHistoricalCandles(
   }
 
   const allCandles: CandleData[] = [];
-  let currentEndTime = endTime;
+  // currentAfterForAPI будет временем открытия самой СТАРОЙ свечи из предыдущей пачки,
+  // или endTime + 1 для самого первого запроса, чтобы включить свечу с timestamp === endTime.
+  // OKX 'after=ts' -> отдает свечи СТАРШЕ ts (т.е. timestamp < ts)
+  let currentAfterForAPI = endTime ? endTime + 1 : undefined; 
   const maxLimitPerRequest = 100;
-  const requestDelay = 250; // Задержка между запросами (ms) для обхода Rate Limit
+  const requestDelay = 250; 
 
-  logger.info(`Fetching candles for ${symbol} (${timeframe}) starting from ${startTime ? new Date(startTime) : 'earliest'} up to ${endTime ? new Date(endTime) : 'now'}`);
+  logger.info(`Fetching candles for ${symbol} (${timeframe}) for period ${startTime ? new Date(startTime).toISOString() : 'earliest'} to ${endTime ? new Date(endTime).toISOString() : 'latest available'}`);
 
   try {
     while (true) {
@@ -168,76 +171,92 @@ export async function getHistoricalCandles(
         limit: maxLimitPerRequest,
       };
 
-      if (currentEndTime) {
-        params.after = currentEndTime; // Загружаем свечи ДО указанного времени
+      if (currentAfterForAPI) {
+        params.after = currentAfterForAPI;
       }
-      if (startTime) {
-         // OKX API не имеет прямого параметра `before` (start time) в этом эндпоинте,
-         // но `after` позволяет двигаться назад во времени.
-         // Мы будем фильтровать результат позже, если startTime задан.
-      }
+      // startTime будет использован для фильтрации ниже.
 
       const response = await axios.get<OkxCandleResponse>(url, { params });
       await delay(requestDelay);
 
       if (response.data && response.data.code === '0' && response.data.data.length > 0) {
-        const candles = response.data.data.map(c => ({
+        // API возвращает свечи от новых к старым (по убыванию timestamp)
+        let fetchedBatchApiResponse = response.data.data.map(c => ({
           timestamp: parseInt(c[0], 10),
           open: parseFloat(c[1]),
           high: parseFloat(c[2]),
           low: parseFloat(c[3]),
           close: parseFloat(c[4]),
-          volume: parseFloat(c[5]), // Объем в контрактах или базовой валюте
-          volumeQuote: parseFloat(c[6]) // Объем в валюте котировки
+          volume: parseFloat(c[5]), 
+          volumeQuote: parseFloat(c[6]) 
         }));
 
-        // Фильтруем по startTime, если он задан
-        const filteredCandles = startTime ? candles.filter(c => c.timestamp >= startTime) : candles;
+        // Разворачиваем, чтобы обрабатывать от старых к новым в этой пачке
+        fetchedBatchApiResponse.reverse();
 
-        // OKX возвращает свечи от новых к старым, переворачиваем для добавления
-        filteredCandles.reverse();
-        allCandles.unshift(...filteredCandles); // Добавляем в начало массива
+        let candlesToProcessThisBatch = fetchedBatchApiResponse;
 
-        const oldestTimestamp = filteredCandles[0]?.timestamp;
+        // Фильтруем по startTime (включительно)
+        if (startTime) {
+          candlesToProcessThisBatch = candlesToProcessThisBatch.filter(c => c.timestamp >= startTime);
+        }
+        // Фильтруем по endTime (включительно)
+        if (endTime) {
+          candlesToProcessThisBatch = candlesToProcessThisBatch.filter(c => c.timestamp <= endTime);
+        }
+        
+        if (candlesToProcessThisBatch.length > 0) {
+          allCandles.unshift(...candlesToProcessThisBatch); // Добавляем в начало общего массива (т.к. пачки идут от новых к старым)
+          // Новый 'after' для API будет timestamp самой старой свечи из *оригинального* ответа API этой пачки,
+          // чтобы не пропустить данные при следующем запросе, если фильтрация отсекла самые старые.
+          // response.data.data[response.data.data.length - 1] это самая старая свеча в ответе API (до reverse)
+          currentAfterForAPI = parseInt(response.data.data[response.data.data.length - 1][0], 10);
+          logger.debug(`Added ${candlesToProcessThisBatch.length} candles for ${symbol}. Oldest in batch: ${new Date(candlesToProcessThisBatch[0].timestamp)}. Next API 'after' will be: ${new Date(currentAfterForAPI)}`);
+        } else {
+           // Если после фильтрации пачка пуста, но API еще что-то вернул,
+           // нужно обновить currentAfterForAPI, чтобы продолжить пагинацию назад
+           if (response.data.data.length > 0) {
+             currentAfterForAPI = parseInt(response.data.data[response.data.data.length - 1][0], 10);
+           }
+        }
 
-        logger.debug(`Fetched ${filteredCandles.length} candles for ${symbol} up to ${new Date(oldestTimestamp)}`);
+        // Условия выхода:
+        const oldestProcessedTimestamp = candlesToProcessThisBatch.length > 0 ? candlesToProcessThisBatch[0].timestamp : (allCandles.length > 0 ? allCandles[0].timestamp : null);
+        
+        const achievedStartTime = startTime && oldestProcessedTimestamp && oldestProcessedTimestamp <= startTime;
+        const achievedLimit = limit && allCandles.length >= limit;
+        // Если API вернул меньше, чем мы просили, значит, это все данные в этом направлении
+        const noMoreDataFromApi = response.data.data.length < maxLimitPerRequest; 
+        // Если после фильтрации ничего не осталось, и API больше ничего не дал, тоже выходим
+        const emptyFilteredBatchAndApiReturnedLessThanMax = candlesToProcessThisBatch.length === 0 && noMoreDataFromApi;
 
-        // Условие выхода:
-        // 1. Достигли startTime
-        // 2. Загрузили нужное количество limit
-        // 3. OKX вернул меньше 100 свечей (значит, достигли начала истории)
-        // 4. Получили пустой массив (на всякий случай)
-        if ( (startTime && oldestTimestamp && oldestTimestamp <= startTime) || 
-             (limit && allCandles.length >= limit) ||
-             candles.length < maxLimitPerRequest ||
-             filteredCandles.length === 0
-            ) {
-          logger.info(`Finished fetching candles for ${symbol}. Total fetched: ${allCandles.length}`);
+
+        if (achievedStartTime || achievedLimit || noMoreDataFromApi || emptyFilteredBatchAndApiReturnedLessThanMax) {
+          if(achievedStartTime) logger.info(`Stop reason: Achieved startTime for ${symbol}. Oldest processed: ${oldestProcessedTimestamp ? new Date(oldestProcessedTimestamp) : 'N/A'}`);
+          if(achievedLimit) logger.info(`Stop reason: Achieved limit (${allCandles.length}/${limit}) for ${symbol}.`);
+          if(noMoreDataFromApi) logger.info(`Stop reason: API returned ${response.data.data.length} (less than max ${maxLimitPerRequest}) for ${symbol}.`);
+          if(emptyFilteredBatchAndApiReturnedLessThanMax) logger.info(`Stop reason: Empty batch after filtering and API has no more data for ${symbol}.`);
           break;
         }
 
-        // Устанавливаем новое `endTime` для следующего запроса пагинации
-        currentEndTime = oldestTimestamp;
-
-      } else if (response.data.code !== '0') {
+      } else if (response.data && response.data.code !== '0') {
         logger.error(`Error fetching candles for ${symbol}: ${response.data.msg} (Code: ${response.data.code})`);
         break;
       } else {
-        // Код '0', но data пустая - достигли конца
-        logger.info(`Finished fetching candles for ${symbol}. No more data received. Total fetched: ${allCandles.length}`);
+        // Код '0', но data пустая или отсутствует - достигли конца истории или ошибка без сообщения
+        logger.info(`Finished fetching candles for ${symbol}. No more data received or data array empty. Total fetched before this: ${allCandles.length}`);
         break;
       }
     } // end while
 
   } catch (error: any) {
-    logger.error(`Error in getHistoricalCandles for ${symbol}:`, error.message || error);
+    logger.error(`Exception in getHistoricalCandles for ${symbol}:`, error.message || error);
   }
 
-  // Если был задан лимит, обрезаем массив
-  if (limit && allCandles.length > limit) {
-    // Так как мы добавляли в начало, берем последние limit элементов
-    return allCandles.slice(-limit);
-  }
-
-  return allCandles;
+  // Финальная сортировка, так как unshift мог выполняться для разных пачек не строго последовательно по времени
+  allCandles.sort((a, b) => a.timestamp - b.timestamp);
+  
+  // Если был задан лимит, возвращаем только последние 'limit' свечей (самые новые)
+  // Если allCandles короче, вернет все что есть.
+  return limit ? allCandles.slice(-Math.min(limit, allCandles.length)) : allCandles;
 } 

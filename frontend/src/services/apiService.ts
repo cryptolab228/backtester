@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { type AxiosResponse } from 'axios';
 // import type { JobCounts, Job, JobStatus, GetJobsParams } from './apiServiceTypes'; // Удаляем, так как типы определены ниже
 
 // Базовый URL бэкенда (можно вынести в .env)
@@ -18,14 +18,14 @@ export interface AbortablePromise<T> {
 }
 
 // Обертка для POST запросов с возможностью отмены
-export function postWithAbort<T>(url: string, data?: any, signal?: AbortSignal): AbortablePromise<T> {
+export function postWithAbort<T>(url: string, data?: any, signal?: AbortSignal): AbortablePromise<AxiosResponse<T>> {
   const controller = new AbortController();
   const abortSignal = signal || controller.signal;
 
   const promise = apiClient.post<T>(url, data, { signal: abortSignal });
 
   return {
-    promise: promise.then(response => response.data), // Возвращаем только данные, как и ожидает backtestStore
+    promise: promise, // Возвращаем полный промис AxiosResponse
     abort: () => controller.abort(),
   };
 }

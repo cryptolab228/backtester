@@ -68,11 +68,11 @@ export const runBacktest = async (
   
   // Изменяем способ логирования, чтобы точно увидеть содержимое
   if (params.strategyParameters) {
-    logger.debug('[RunBacktest] Strategy Parameters (raw):', params.strategyParameters);
-    logger.debug('[RunBacktest] Strategy Parameters (JSON): ' + JSON.stringify(params.strategyParameters, null, 2));
+    // logger.debug('[RunBacktest] Strategy Parameters (raw):', params.strategyParameters);
+    // logger.debug('[RunBacktest] Strategy Parameters (JSON): ' + JSON.stringify(params.strategyParameters, null, 2));
     if (params.strategyParameters.risk) {
-      logger.debug('[RunBacktest] Risk Settings (raw):', params.strategyParameters.risk);
-      logger.debug('[RunBacktest] Risk Settings (JSON): ' + JSON.stringify(params.strategyParameters.risk, null, 2));
+      // logger.debug('[RunBacktest] Risk Settings (raw):', params.strategyParameters.risk);
+      // logger.debug('[RunBacktest] Risk Settings (JSON): ' + JSON.stringify(params.strategyParameters.risk, null, 2));
     } else {
       logger.warn('[RunBacktest] Risk settings are missing within strategyParameters.');
     }
@@ -91,16 +91,16 @@ export const runBacktest = async (
   // Добавим детальное логирование первых и последних нескольких strategyCandles
   if (strategyCandles && strategyCandles.length > 0) {
     const logCount = Math.min(5, strategyCandles.length);
-    logger.debug('[RunBacktest] First few strategy candles:');
-    for (let k = 0; k < logCount; k++) {
-      logger.debug(`[Candle-${k}] ${JSON.stringify(strategyCandles[k])}`);
-    }
-    if (strategyCandles.length > logCount * 2) { // Если свечей много, логируем и последние
-      logger.debug('[RunBacktest] Last few strategy candles:');
-      for (let k = strategyCandles.length - logCount; k < strategyCandles.length; k++) {
-        logger.debug(`[Candle-${k}] ${JSON.stringify(strategyCandles[k])}`);
-      }
-    }
+    // logger.debug('[RunBacktest] First few strategy candles:');
+    // for (let k = 0; k < logCount; k++) {
+    //   logger.debug(`[Candle-${k}] ${JSON.stringify(strategyCandles[k])}`);
+    // }
+    // if (strategyCandles.length > logCount * 2) { // Если свечей много, логируем и последние
+    //   logger.debug('[RunBacktest] Last few strategy candles:');
+    //   for (let k = strategyCandles.length - logCount; k < strategyCandles.length; k++) {
+    //     logger.debug(`[Candle-${k}] ${JSON.stringify(strategyCandles[k])}`);
+    //   }
+    // }
   } else {
     logger.warn('[RunBacktest] No strategy candles available after applyStrategyLogic.');
   }
@@ -145,7 +145,7 @@ export const runBacktest = async (
   const equityCurve: Array<{ timestamp: number; capital: number }> = [
     { timestamp: candles[0]?.timestamp ?? new Date(params.startDate).getTime() ?? 0, capital: params.initialCapital }
   ];
-  logger.debug(`[RunBacktest] Initial equity point: ${JSON.stringify(equityCurve[0])}`);
+  // logger.debug(`[RunBacktest] Initial equity point: ${JSON.stringify(equityCurve[0])}`);
 
   // 3. Итерация по свечам для симуляции торговли
   logger.info(`[RunBacktest] Starting simulation loop over ${strategyCandles.length} strategy candles.`);
@@ -153,9 +153,9 @@ export const runBacktest = async (
     const currentCandle = strategyCandles[i];
     const prevCandle = i > 0 ? strategyCandles[i - 1] : null;
 
-    if (i < 5 || i > strategyCandles.length - 5) {
-        logger.debug(`[RunBacktest-Loop ${i}] Candle TS: ${currentCandle.timestamp}, O: ${currentCandle.open}, H: ${currentCandle.high}, L: ${currentCandle.low}, C: ${currentCandle.close}, V: ${currentCandle.volume}, ATR: ${currentCandle.atr}, EntryL: ${currentCandle.entryConditionLong}, EntryS: ${currentCandle.entryConditionShort}`);
-    }
+    // if (i < 5 || i > strategyCandles.length - 5) {
+    //     logger.debug(`[RunBacktest-Loop ${i}] Candle TS: ${currentCandle.timestamp}, O: ${currentCandle.open}, H: ${currentCandle.high}, L: ${currentCandle.low}, C: ${currentCandle.close}, V: ${currentCandle.volume}, ATR: ${currentCandle.atr}, EntryL: ${currentCandle.entryConditionLong}, EntryS: ${currentCandle.entryConditionShort}`);
+    // }
 
     // Логика управления рисками и размером позиции
     const riskSettings = params.strategyParameters?.risk;
@@ -201,7 +201,7 @@ export const runBacktest = async (
         }
         activeTrade.pnl = pnl;
         currentCapital += pnl;
-        logger.info(`[RunBacktest-TradeClose] ID: ${activeTrade.id}, PnL: ${pnl.toFixed(2)}, Capital: ${currentCapital.toFixed(2)}`);
+        // logger.info(`[RunBacktest-TradeClose] ID: ${activeTrade.id}, PnL: ${pnl.toFixed(2)}, Capital: ${currentCapital.toFixed(2)}`);
         
         peakCapital = Math.max(peakCapital, currentCapital);
         const drawdown = peakCapital > 0 ? ((peakCapital - currentCapital) / peakCapital) * 100 : 0;
@@ -210,7 +210,7 @@ export const runBacktest = async (
         trades.push({ ...activeTrade });
         if (activeTrade.exitTimestamp) {
           equityCurve.push({ timestamp: activeTrade.exitTimestamp, capital: currentCapital });
-          logger.info(`[RunBacktest-TradeClose][${new Date(activeTrade.exitTimestamp).toISOString()}] Closed ${activeTrade.direction} trade. Entry: ${activeTrade.entryPrice}, Exit: ${activeTrade.exitPrice}, Size: ${activeTrade.size}, SL: ${activeTrade.stopLoss}, TP: ${activeTrade.takeProfit}, Reason: ${activeTrade.exitReason}, PnL: ${activeTrade.pnl?.toFixed(2)}, Capital: ${currentCapital.toFixed(2)}`);
+          // logger.info(`[RunBacktest-TradeClose][${new Date(activeTrade.exitTimestamp).toISOString()}] Closed ${activeTrade.direction} trade. Entry: ${activeTrade.entryPrice}, Exit: ${activeTrade.exitPrice}, Size: ${activeTrade.size}, SL: ${activeTrade.stopLoss}, TP: ${activeTrade.takeProfit}, Reason: ${activeTrade.exitReason}, PnL: ${activeTrade.pnl?.toFixed(2)}, Capital: ${currentCapital.toFixed(2)}`);
         }
         activeTrade = null;
       }
@@ -262,7 +262,7 @@ export const runBacktest = async (
             takeProfit: takeProfitPrice,
             status: 'active',
           };
-          logger.info(`[RunBacktest-TradeOpen][${new Date(activeTrade.entryTimestamp).toISOString()}] New ${activeTrade.direction} trade opened. Price: ${activeTrade.entryPrice}, Size: ${activeTrade.size}, SL: ${activeTrade.stopLoss}, TP: ${activeTrade.takeProfit}`);
+          // logger.info(`[RunBacktest-TradeOpen][${new Date(activeTrade.entryTimestamp).toISOString()}] New ${activeTrade.direction} trade opened. Price: ${activeTrade.entryPrice}, Size: ${activeTrade.size}, SL: ${activeTrade.stopLoss}, TP: ${activeTrade.takeProfit}`);
         } else {
           logger.warn(`[RunBacktest-Loop ${i}] Position size is 0 or less, no trade opened.`);
         }
@@ -306,7 +306,7 @@ export const runBacktest = async (
     // Если сделок нет, все эти метрики равны 0, что было установлено при инициализации
   }
   
-  logger.debug(`[RunBacktest-Metrics] Calculated: totalPnl=${totalPnl.toFixed(2)}, totalPnlPercentage=${totalPnlPercentage.toFixed(2)}%, totalTrades=${trades.length}, winRate=${(winRate * 100).toFixed(2)}%, avgPnl=${averageTradePnl.toFixed(2)}, avgWin=${avgWinningTrade.toFixed(2)}, avgLoss=${avgLosingTrade.toFixed(2)}, expectancy=${expectancy.toFixed(2)}`);
+  // logger.debug(`[RunBacktest-Metrics] Calculated: totalPnl=${totalPnl.toFixed(2)}, totalPnlPercentage=${totalPnlPercentage.toFixed(2)}%, totalTrades=${trades.length}, winRate=${(winRate * 100).toFixed(2)}%, avgPnl=${averageTradePnl.toFixed(2)}, avgWin=${avgWinningTrade.toFixed(2)}, avgLoss=${avgLosingTrade.toFixed(2)}, expectancy=${expectancy.toFixed(2)}`);
 
   const metrics: BacktestMetrics = {
     totalPnl,

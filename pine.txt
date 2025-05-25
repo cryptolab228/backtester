@@ -338,3 +338,47 @@ if (barstate.islastconfirmedhistory)
 
 // Ограничение риска
 strategy.risk.max_intraday_filled_orders(max_trades_per_day)
+
+
+
+
+Хорошо, давайте вернемся к TODO и систематизируем их.
+Исходя из нашего предыдущего анализа и изменений, вот основные пункты, на которые нам нужно обратить внимание, сгруппированные по файлам и областям:
+1. Логика Индикаторов (backend/src/modules/strategy_logic/indicators.ts)
+calculateNWE:
+Параметры: Убедиться, что принимаемые параметры (NWECalculationParams) и их использование внутри функции (h для bandwidth, mult для multiplier, source для nwe_src) точно соответствуют реализации Nadaraya-Watson Envelope в Pine Script.
+В Pine Script используются nwe_src (источник цены), h (ширина канала), mult (множитель). Текущая реализация calculateNWE может использовать другие или дополнительные параметры (например, lookbackPeriod, atrPeriod), которые могут быть нерелевантны или требовать корректировки.
+Логика ATR: Pine Script упоминает use_atr_for_nwe_and_clusters. Если этот параметр активен в Pine, ATR должен влиять на расчет NWE. Текущая calculateNWE принимает atrMultiplier, но нужно проверить, полностью ли это покрывает логику Pine.
+repaint: Проверить, как используется параметр repaint в Pine и нужен ли он в нашей реализации.
+2. Логика Стратегии (backend/src/modules/strategy_logic/strategy.ts)
+Интеграция NWE:
+Дважды проверить, как nweValues (результат calculateNWE) используются для генерации торговых сигналов. Убедиться, что логика определения верхней/нижней границы канала и условия пробоя соответствуют Pine Script.
+Логика Кластеров:
+Pine Script использует use_cluster_delta_divergence и use_cluster_vol_profile. Необходимо убедиться, что эти опции корректно обрабатываются. Текущая логика бэкенда использует clusterSource ('delta' или 'volume') и minVolumeThresholdMultiplier / deltaThreshold.
+Проверить использование clusterLookbackPeriod.
+Как ATR (если use_atr_for_nwe_and_clusters активен) должен влиять на пороги кластеров.
+Использование ATR в сигналах: Если use_atr_for_nwe_and_clusters = true в Pine, как это должно влиять на условия входа, основанные на NWE и кластерах?
+Общее Соответствие Параметров:
+Убедиться, что все входные параметры из Pine Script корректно используются в логике бэкенда или подтвердить, что некоторые из них намеренно опущены/обрабатываются иначе.
+DefaultStrategyParameters в strategy.ts должны быть единственным источником значений по умолчанию, отражая стандартные настройки Pine Script.
+3. Логика Бектестера (backend/src/modules/backtester/backtester.ts)
+Расчет Stop Loss (SL) и Take Profit (TP):
+Сравнить текущую логику расчета SL/TP (на основе high/low/close сигнальной свечи и множителя ATR) с функциями calcStopLoss и calcTakeProfit из Pine Script. Особое внимание уделить использованию atr_for_sl_tp_mult, atr_stop_loss_mult, atr_take_profit_mult.
+Pine Script использует fixed_sl_tp_active, fixed_sl_points, fixed_tp_points. Эти параметры должны быть реализованы.
+Pine Script использует use_atr_for_sl_tp. Убедиться, что это учтено.
+Цена Входа (entryPrice):
+Подтвердить, всегда ли entryPrice это signalCandle.close, или она должна варьироваться в зависимости от типа сигнала или других условий. Pine Script в своей логике для NWE/DLC использует close для входа.
+Условия Выхода из Сделки:
+Помимо SL/TP, есть ли в Pine Script другие условия выхода (например, по времени, по контр-сигналу), которые нужно реализовать? В Pine Script есть вызовы strategy.close() при определенных условиях.
+Управление Рисками:
+Размер Позиции:
+Pine Script имеет percent_capital_per_trade. Наш risk.positionSizePercentage должен соответствовать этому.
+Текущий расчет size = (capital * params.risk.positionSizePercentage) / entryPrice подходит для спотового рынка/криптовалют.
+Максимальный Риск на Сделку:
+Pine Script использует max_risk_per_trade_percent_atr_based. Наш risk.maxRiskPerTradePercentage, вероятно, соответствует этому. Нужно проверить, как он взаимодействует с SL, основанным на ATR. Текущая логика корректирует размер позиции, если начальный SL на основе ATR рискует большим процентом капитала, чем указано.
+Приоритеты:
+Я бы предложил следующий порядок:
+calculateNWE в indicators.ts: Это фундаментальный индикатор, и его точность критична.
+Интеграция NWE и Кластеров в strategy.ts: Корректное использование результатов индикаторов.
+Логика SL/TP и Управление Рисками в backtester.ts: Точность этих расчетов напрямую влияет на результаты бэктеста.
+Согласны ли вы с таким планом? С чего начнем? Предлагаю начать с calculateNWE в indicators.ts и его соответствия Pine Script. Для этого мне нужно будет еще раз внимательно изучить соответствующий раздел вашего pine.txt и код indicators.ts.
