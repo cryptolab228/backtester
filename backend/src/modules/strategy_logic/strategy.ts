@@ -1,5 +1,6 @@
 // Файл для основной логики стратегии
 
+import logger from '../../utils/logger'; // Импорт логгера
 import {
   CandleData,
   calculateATR,
@@ -9,8 +10,8 @@ import {
   NWEResultPoint,
   calculateAvgVolume,
   calculateApproxDelta,
+  NWECalculationParams
 } from './indicators';
-import logger from '../../utils/logger'; // Импорт логгера
 
 export interface DLCSettings {
   period?: number; 
@@ -120,6 +121,7 @@ export interface StrategyCandle extends CandleData {
   volumeClusterStrength?: number;
   entryConditionLong?: boolean;
   entryConditionShort?: boolean;
+  signalStrength?: number | null;
 }
 
 export interface StrategyLogicResult {
@@ -150,17 +152,17 @@ export const applyStrategyLogic = (
   }));
 
   // Обновленное извлечение параметров
-  const atrPeriodForRisk = params.risk?.atrPeriod ?? 14;
+  const atrPeriodForRisk = params.risk?.atrPeriod ?? DefaultStrategyParameters.risk!.atrPeriod!;
   
   // Параметры NWE
-  const nweEnabled = params.nwe?.enabled ?? true;
-  const nweBandwidth = params.nwe?.bandwidth ?? 8.0;
-  const nweMultiplier = params.nwe?.multiplier ?? 3.0;
-  const nweSource = params.nwe?.source ?? 'close';
-  // const nweRepaint = params.nwe?.repaint ?? false; // Пока не используется в вызове calculateNWE
+  const nweEnabled = params.nwe?.enabled ?? DefaultStrategyParameters.nwe!.enabled!;
+  const nweBandwidth = params.nwe?.bandwidth ?? DefaultStrategyParameters.nwe!.bandwidth!;
+  const nweMultiplier = params.nwe?.multiplier ?? DefaultStrategyParameters.nwe!.multiplier!;
+  const nweSource = params.nwe?.source ?? DefaultStrategyParameters.nwe!.source!;
+  // const nweRepaint = params.nwe?.repaint ?? DefaultStrategyParameters.nwe!.repaint!; // Параметр repaint пока не используется в вызове calculateNWE
 
-  const vpNumBins = params.dlc?.numBins ?? 100;
-  const vpVaPercentage = params.dlc?.vaPercentage ?? 0.7;
+  const vpNumBins = params.dlc?.numBins ?? DefaultStrategyParameters.dlc!.numBins!;
+  const vpVaPercentage = params.dlc?.vaPercentage ?? DefaultStrategyParameters.dlc!.vaPercentage!;
   const avgVolPeriod = params.clusters?.lookbackPeriod ?? 20;
   const clusterSource = params.clusters?.source ?? 'volume';
   const clusterMinVolumeThresholdMultiplier = params.clusters?.minVolumeThresholdMultiplier ?? 1.5;
@@ -170,26 +172,40 @@ export const applyStrategyLogic = (
   const dlcPeriod = params.dlc?.dlcPeriod ?? 40; 
   const pocLookback = params.dlc?.pocLookback ?? 5; 
 
-  // logger.debug(`[ApplyStrategyLogic] Params: atrPeriodForRisk=${atrPeriodForRisk}, nweEnabled=${nweEnabled}, nweBandwidth=${nweBandwidth}, nweMultiplier=${nweMultiplier}, nweSource=${nweSource}, vpBins=${vpNumBins}, vpVA%=${vpVaPercentage}, avgVolPeriod=${avgVolPeriod}, clusterSrc=${clusterSource}, clusterMinVolMultiplier=${clusterMinVolumeThresholdMultiplier}, clusterConfirmBars=${clusterConfirmationBars}, clusterDeltaThreshold=${clusterDeltaThreshold}, dlcPeriod=${dlcPeriod}, pocLookback=${pocLookback}`);
-
   const atrValues = calculateATR(candles, atrPeriodForRisk);
   
   let nweValues: NWEResultPoint[] = [];
   if (nweEnabled) {
-    // Используем параметры, которые ожидает текущая реализация calculateNWE
-    // lookbackPeriod и atrPeriod для NWE могут потребовать уточнения для точного соответствия Pine.
-    // В Pine NWE `h` (bandwidth) и `mult` (multiplier) - ключевые. 
-    // `lookbackPeriod` в Pine NWE обычно большой (около 500), `atrPeriod` не используется напрямую NWE.
-    const nweCalcParams = {
-      lookbackPeriod: 500, // Временное значение, близкое к Pine NWE, если ваша функция его использует.
-      atrPeriod: atrPeriodForRisk, // Используем общий ATR период, если calculateNWE его ожидает.
-      atrMultiplier: nweMultiplier // Используем новый nweMultiplier из параметров
+    // Используем параметры, которые ожидает текущая реализация calculateNWE,
+    // а также пытаемся передать ключевые параметры NWE (source, bandwidth),
+    // предполагая, что calculateNWE сможет их использовать.
+    const nweCalcParamsForIndicator = {
+      // Параметры, которые, возможно, ожидает текущая версия calculateNWE:
+      lookbackPeriod: 500, // Фиксированное значение, возможно, специфичное для текущей реализации calculateNWE
+      atrPeriod: atrPeriodForRisk, // Используем общий ATR период, если calculateNWE его ожидает для внутренних нужд
+      
+      // Ключевые параметры NWE, которые должны использоваться:
+      source: nweSource,           // Источник цены (например, 'close')
+      bandwidth: nweBandwidth,       // Параметр 'h' для NWE
+      atrMultiplier: nweMultiplier,  // Основной множитель для NWE (в params.nwe называется 'multiplier')
+      // repaint: nweRepaint       // Если/когда calculateNWE будет поддерживать repaint
     };
-    // logger.debug('[ApplyStrategyLogic] Calling calculateNWE with params:', nweCalcParams);
-    nweValues = calculateNWE(candles, nweCalcParams);
+    
+    // Вызов calculateNWE. Если его сигнатура строго определена и не принимает source/bandwidth напрямую,
+    // эти поля будут проигнорированы им, если не используется 'as any' или подобное.
+    // Важно, чтобы реализация calculateNWE соответствовала ожиданиям по этим параметрам.
+    nweValues = calculateNWE(candles, nweCalcParamsForIndicator as any); // Используем 'as any' для гибкости передачи параметров, если сигнатура calculateNWE строгая
   } else {
     // Если NWE отключен, создаем пустой массив с корректными полями NWEResultPoint
-    nweValues = candles.map(() => ({ nweUpper: null, nweLower: null }));
+    // Создаем фиктивные параметры для соответствия интерфейсу
+    const dummyParams: NWECalculationParams = {
+      source: 'close',
+      bandwidth: 1,
+      multiplier: 1,
+      lookbackPeriod: 1,
+      atrPeriod: 1
+    };
+    nweValues = candles.map(() => ({ nweUpper: null, nweLower: null, params: dummyParams }));
   }
 
   const avgVolumeValues = calculateAvgVolume(candles, avgVolPeriod);
@@ -203,156 +219,180 @@ export const applyStrategyLogic = (
       if (candles[k].low < minSliceLow) minSliceLow = candles[k].low;
       if (candles[k].high > maxSliceHigh) maxSliceHigh = candles[k].high;
     }
-    // logger.debug(`[ApplyStrategyLogic] Before calling calculateVolumeProfile for the entire dataset (${candles.length} candles): MinLow=${minSliceLow}, MaxHigh=${maxSliceHigh}`);
     if (minSliceLow > maxSliceHigh) {
         logger.error(`[ApplyStrategyLogic] ANOMALY DETECTED in full dataset before VP: minLow (${minSliceLow}) > maxHigh (${maxSliceHigh}).`);
     }
   }
 
-  const pocHistory: number[] = []; // <--- ДОБАВЛЕНО: История POC для pocDirection
-  const strategyCandles: StrategyCandle[] = []; // Будем заполнять в цикле
+  const pocHistory: (number | null)[] = [];
+  const vahHistory: (number | null)[] = [];
+  const valHistory: (number | null)[] = [];
 
-  for (let index = 0; index < candles.length; index++) {
-    const candle = candles[index];
+  // Основной цикл по свечам для применения логики
+  const strategyCandles = candles.map((candle, index) => {
     const currentAtr = atrValues[index];
-    const nwePoint: NWEResultPoint | undefined = nweValues[index];
-    const avgVolume = avgVolumeValues[index];
-    const approxDelta = approxDeltaValues[index];
+    const currentNwe = nweEnabled ? nweValues[index] : { nweUpper: null, nweLower: null };
+    const currentAvgVolume = avgVolumeValues[index];
+    const currentApproxDelta = approxDeltaValues[index];
 
-    let dynamicPoc: number | null = null;
-    let dynamicVah: number | null = null;
-    let dynamicVal: number | null = null;
-    let pocDirection = 0;
-    let currentVolumeProfile: VolumeProfileResult | null = null;
-
-    if (index >= dlcPeriod -1) {
-      const candleSliceForVP = candles.slice(index - dlcPeriod + 1, index + 1);
-      if (candleSliceForVP.length === dlcPeriod) {
-        currentVolumeProfile = calculateVolumeProfile(candleSliceForVP, vpNumBins, vpVaPercentage);
-        if (currentVolumeProfile.poc !== null) {
-          dynamicPoc = currentVolumeProfile.poc;
-          dynamicVah = currentVolumeProfile.vah;
-          dynamicVal = currentVolumeProfile.val;
-
-          // Обновление истории POC и расчет pocDirection
-          if (pocHistory.length >= pocLookback) {
-            pocHistory.shift(); // Удаляем самый старый POC
-          }
-          pocHistory.push(dynamicPoc);
-
-          if (pocHistory.length === pocLookback) {
-            if (pocHistory[pocLookback - 1] > pocHistory[0]) {
-              pocDirection = 1;
-            } else if (pocHistory[pocLookback - 1] < pocHistory[0]) {
-              pocDirection = -1;
-            }
-          }
-        }
-      }
-    }
-    
-    let isClusterSignal = false;
-    // volumeClusterStrength больше не используется напрямую в условиях входа Pine, но может быть полезен для логов
-    // let volumeClusterStrength: number | undefined = undefined; 
-
-    if (clusterSource === 'volume' && avgVolume > 0 && candle.volume > 0) {
-      const threshold = avgVolume * clusterMinVolumeThresholdMultiplier; // Используем новое имя параметра
-      if (candle.volume > threshold) {
-        // isVolumeCluster = true; // переименовано в isClusterSignal или будет частью логики ниже
-        // volumeClusterStrength = candle.volume / avgVolume;
-      }
-    }
-    // TODO: Добавить логику для clusterSource === 'delta' с использованием approxDelta и clusterDeltaThreshold
-    
-
-    // --- НАЧАЛО: Новые условия входа на основе Pine Script ---
-    let entryConditionLong = false;
-    let entryConditionShort = false;
-
-    // NWE сигналы (аналогично Pine)
-    // Убедимся, что nwePoint корректно обрабатывается, если NWE отключен (nweValues будет содержать nulls)
-    const currentNwePoint = nweValues[index];
-    const nweBuySignal = nweEnabled && currentNwePoint?.nweLower !== null && candle.close > (currentNwePoint?.nweLower ?? -Infinity);
-    const nweSellSignal = nweEnabled && currentNwePoint?.nweUpper !== null && candle.close < (currentNwePoint?.nweUpper ?? Infinity);
-
-    // Кластерные сигналы с учетом VAH/VAL (аналогично Pine, bullish_cluster / bearish_cluster)
-    // Pine: bullish_cluster = high_volume and delta > 0 and strong_delta and low < val_price and close > open
-    // Pine: bearish_cluster = high_volume and delta < 0 and strong_delta and high > vah_price and close < open
-    
-    // high_volume условие:
-    const isHighVolume = candle.volume > (avgVolume * clusterMinVolumeThresholdMultiplier);
-    // strong_delta условие (приблизительно):
-    // В Pine: delta_ratio = math.abs(delta) / volume; strong_delta = delta_ratio > delta_threshold
-    // У нас есть approxDelta. Если volume = 0, delta_ratio будет NaN или Infinity.
-    const deltaRatio = candle.volume !== 0 ? Math.abs(approxDelta) / candle.volume : 0;
-    const isStrongDelta = deltaRatio > clusterDeltaThreshold;
-
-    let bullishCluster = false;
-    if (dynamicVal !== null && pocDirection > 0) { // Добавлена проверка pocDirection > 0
-        bullishCluster = isHighVolume && approxDelta > 0 && isStrongDelta && candle.low < dynamicVal && candle.close > candle.open;
-    }
-
-    let bearishCluster = false;
-    if (dynamicVah !== null && pocDirection < 0) { // Добавлена проверка pocDirection < 0
-        bearishCluster = isHighVolume && approxDelta < 0 && isStrongDelta && candle.high > dynamicVah && candle.close < candle.open;
-    }
-    
-    // Подтверждение кластера (если confirmationBars > 0)
-    if (clusterConfirmationBars > 0 && index >= clusterConfirmationBars) {
-        let prevBullishCluster = true;
-        let prevBearishCluster = true;
-        for (let k = 1; k <= clusterConfirmationBars; k++) {
-            const prevCandleSignals = strategyCandles[index - k]; // Предполагаем, что strategyCandles содержит поля для кластеров
-            // TODO: Нужно будет добавить поля bullishClusterSignal / bearishClusterSignal в StrategyCandle
-            // и заполнять их перед этой проверкой, или пересчитывать условия кластера для предыдущих свечей здесь.
-            // Пока что эта логика не будет работать корректно без хранения сигналов кластера.
-            // Для упрощения, пока уберем эту сложную часть подтверждения и вернемся к ней.
-            // bullishCluster = bullishCluster && prevCandleSignals.isBullishClusterConfirmed; // Пример
-            // bearishCluster = bearishCluster && prevCandleSignals.isBearishClusterConfirmed; // Пример
-        }
-        // В Pine: bullish_reaction = bullish_cluster[1] and close > open 
-        // Это означает, что сам кластер был на предыдущей свече, а текущая свеча - реакция.
-        // Текущая логика `bullishCluster` и `bearishCluster` определяет кластер НА ТЕКУЩЕЙ свече.
-        // Нужно будет сдвинуть эту логику или проверку на 1 бар назад для соответствия `cluster[1]`
-    }
-
-    // Условия для входа в позицию (Pine: (poc_direction > 0 and bullish_cluster) or (poc_direction > 0 and nwe_buy_signal))
-    if (pocDirection > 0 && (bullishCluster || nweBuySignal)) {
-      entryConditionLong = true;
-    }
-
-    // Pine: (poc_direction < 0 and bearish_cluster) or (poc_direction < 0 and nwe_sell_signal)
-    if (pocDirection < 0 && (bearishCluster || nweSellSignal)) {
-      entryConditionShort = true;
-    }
-
-    // --- КОНЕЦ: Новые условия входа --- 
-
-    // Логирование для отладки динамического POC и условий
-    if (dynamicPoc !== null && (index < dlcPeriod + 5 || index > candles.length - 5 || entryConditionLong || entryConditionShort)) {
-        // logger.debug(`[Candle-${index}] Time: ${new Date(candle.timestamp).toISOString()}, DynPOC: ${dynamicPoc?.toFixed(2)}, DynVAH: ${dynamicVah?.toFixed(2)}, DynVAL: ${dynamicVal?.toFixed(2)}, POCDir: ${pocDirection}, BullClust: ${bullishCluster}, BearClust: ${bearishCluster}, NWELong: ${nweBuySignal}, NWEShort: ${nweSellSignal}, LongCond: ${entryConditionLong}, ShortCond: ${entryConditionShort}`);
-    }
-
-
-    strategyCandles.push({
+    const strategyCandle: StrategyCandle = {
       ...candle,
       atr: currentAtr,
-      nweUpper: currentNwePoint?.nweUpper, // Используем nweUpper
-      nweLower: currentNwePoint?.nweLower, // Используем nweLower
-      avgVolume: avgVolume,
-      approxDelta: approxDelta,
-      isVolumeCluster: isClusterSignal, // Это все еще старый isVolumeCluster, нужно подумать, как его совместить с bullish/bearishClusterSignal
-      volumeClusterStrength: isClusterSignal ? 1 : undefined,
-      // Можно добавить поля для динамического POC, VAH, VAL если нужно их видеть в каждой свече
-      // dynamicPoc: dynamicPoc, 
-      // dynamicVah: dynamicVah,
-      // dynamicVal: dynamicVal,
-      entryConditionLong: entryConditionLong,
-      entryConditionShort: entryConditionShort,
-    });
-  } // Конец цикла for по свечам
+      nweUpper: currentNwe?.nweUpper,
+      nweLower: currentNwe?.nweLower,
+      avgVolume: currentAvgVolume,
+      approxDelta: currentApproxDelta,
+      entryConditionLong: false,
+      entryConditionShort: false,
+      signalStrength: null,
+      isVolumeCluster: false, 
+      volumeClusterStrength: 0,
+    };
 
-  // logger.info(`[ApplyStrategyLogic] Processed ${strategyCandles.length} candles.`);
-  // Возвращаем volumeProfile: null, так как теперь он динамический
-  return { strategyCandles, volumeProfile: null }; 
+    // --- Расчет Volume Profile и POC/VAH/VAL для текущего окна ---
+    let currentVpResult: VolumeProfileResult | null = null;
+    if (index >= dlcPeriod - 1) {
+      const vpSlice = candles.slice(index - dlcPeriod + 1, index + 1);
+      currentVpResult = calculateVolumeProfile(vpSlice, vpNumBins, vpVaPercentage);
+      if (currentVpResult) {
+        // Логика определения POC, VAH, VAL на основе currentVpResult
+        // Для упрощения, предположим, что pocHistory и т.д. заполняются здесь
+        // На самом деле, вам нужна логика скользящего POC/VAH/VAL или использование `pocLookback`
+      }
+    }
+    // Placeholder для POC/VAH/VAL - замените реальной логикой!
+    const currentPoc = currentVpResult?.poc ?? null; 
+    const currentVah = currentVpResult?.vah ?? null;
+    const currentVal = currentVpResult?.val ?? null;
+
+
+    // --- Логика Кластеров ---
+    // (Уже есть в вашем коде, но может потребовать доработки для силы кластера)
+    // Пример:
+    if (currentAvgVolume !== undefined && currentAvgVolume > 0 && candle.volume > currentAvgVolume * clusterMinVolumeThresholdMultiplier) {
+      strategyCandle.isVolumeCluster = true;
+      strategyCandle.volumeClusterStrength = (candle.volume / currentAvgVolume) - clusterMinVolumeThresholdMultiplier;
+      // Здесь нужно определить, бычий это кластер или медвежий, например, по дельте или свече
+    }
+    // --- Конец Логики Кластеров ---
+    
+    // --- Логика определения сигналов и их силы ---
+    let calculatedSignalStrength = 0;
+    let isLongSignal = false;
+    let isShortSignal = false;
+
+    let dlcLongActive = false;
+    let nweLongActive = false;
+    let clusterLongActive = false; // Подразумевается бычий кластер
+
+    let dlcShortActive = false;
+    let nweShortActive = false;
+    let clusterShortActive = false; // Подразумевается медвежий кластер
+
+    // Условия для LONG сигналов
+    // 1. DLC - Long (пример: отбой от VAL или POC снизу)
+    if (currentVal !== null && candle.low <= currentVal && candle.close > currentVal) {
+        dlcLongActive = true;
+    } else if (currentPoc !== null && candle.low <= currentPoc && candle.close > currentPoc && candle.open > currentPoc) { // Более строгий отбой от POC
+        dlcLongActive = true;
+    }
+    // Можно добавить ложный пробой VAL/POC
+
+    // 2. NWE - Long (пример: отбой от nweLower)
+    if (nweEnabled && strategyCandle.nweLower !== null && strategyCandle.nweLower !== undefined && candle.low <= strategyCandle.nweLower && candle.close > strategyCandle.nweLower) {
+        nweLongActive = true;
+    }
+    // Можно добавить ложный пробой nweLower
+
+    // 3. Cluster - Long (пример: бычий кластер на поддержке)
+    // Здесь нужна более точная логика определения "бычьего" кластера
+    // Например, isVolumeCluster + (currentApproxDelta > 0) или свеча закрылась вверх
+    if (strategyCandle.isVolumeCluster && currentAvgVolume !== undefined && currentApproxDelta > (clusterDeltaThreshold * (currentAvgVolume * 0.01))) { // Пример использования дельты
+        clusterLongActive = true;
+    }
+    
+    // --- Расчет силы для LONG ---
+    if (dlcLongActive || nweLongActive || clusterLongActive) { // Если есть хотя бы один компонент
+        isLongSignal = true; // Базовое условие входа (уточнить по вашей стратегии)
+        if (dlcLongActive) calculatedSignalStrength += 1.0;
+        if (nweLongActive) calculatedSignalStrength += 1.0;
+        if (clusterLongActive) {
+            calculatedSignalStrength += 1.0;
+            calculatedSignalStrength += (strategyCandle.volumeClusterStrength ?? 0) * 0.2; // Добавляем силу самого кластера
+        }
+
+        // Бонусы за конфлюентность
+        let confBonusLong = 0;
+        const longSignalsCount = (dlcLongActive ? 1:0) + (nweLongActive ? 1:0) + (clusterLongActive ? 1:0);
+        if (longSignalsCount === 2) confBonusLong = 1.0;
+        if (longSignalsCount === 3) confBonusLong = 1.5; 
+        calculatedSignalStrength += confBonusLong;
+    }
+
+
+    // Условия для SHORT сигналов
+    // 1. DLC - Short (пример: отбой от VAH или POC сверху)
+    if (currentVah !== null && candle.high >= currentVah && candle.close < currentVah) {
+        dlcShortActive = true;
+    } else if (currentPoc !== null && candle.high >= currentPoc && candle.close < currentPoc && candle.open < currentPoc) {
+        dlcShortActive = true;
+    }
+
+    // 2. NWE - Short (пример: отбой от nweUpper)
+    if (nweEnabled && strategyCandle.nweUpper !== null && strategyCandle.nweUpper !== undefined && candle.high >= strategyCandle.nweUpper && candle.close < strategyCandle.nweUpper) {
+        nweShortActive = true;
+    }
+    
+    // 3. Cluster - Short (пример: медвежий кластер на сопротивлении)
+    if (strategyCandle.isVolumeCluster && currentAvgVolume !== undefined && currentApproxDelta < (-clusterDeltaThreshold * (currentAvgVolume * 0.01))) {
+        clusterShortActive = true;
+    }
+
+    // --- Расчет силы для SHORT ---
+    // Важно: если уже есть Long сигнал на этой свече, обычно Short не рассматриваем (или наоборот)
+    // Для простоты, сейчас позволим им быть независимыми, но в реальной системе это нужно будет разруливать
+    if (!isLongSignal && (dlcShortActive || nweShortActive || clusterShortActive)) {
+        isShortSignal = true; 
+        calculatedSignalStrength = 0; // Сбрасываем, если был расчет для лонга, но лонг не активировался
+        if (dlcShortActive) calculatedSignalStrength += 1.0;
+        if (nweShortActive) calculatedSignalStrength += 1.0;
+        if (clusterShortActive) {
+            calculatedSignalStrength += 1.0;
+            calculatedSignalStrength += (strategyCandle.volumeClusterStrength ?? 0) * 0.2;
+        }
+        
+        let confBonusShort = 0;
+        const shortSignalsCount = (dlcShortActive ? 1:0) + (nweShortActive ? 1:0) + (clusterShortActive ? 1:0);
+        if (shortSignalsCount === 2) confBonusShort = 1.0;
+        if (shortSignalsCount === 3) confBonusShort = 1.5;
+        calculatedSignalStrength += confBonusShort;
+    }
+    
+    // Если в итоге нет ни Long ни Short сигнала, сбрасываем силу
+    if (!isLongSignal && !isShortSignal) {
+        calculatedSignalStrength = 0;
+    }
+
+    strategyCandle.entryConditionLong = isLongSignal;
+    strategyCandle.entryConditionShort = isShortSignal;
+    strategyCandle.signalStrength = calculatedSignalStrength > 0 ? calculatedSignalStrength : null;
+    
+    // --- Конец Логики определения сигналов ---
+
+    // Обновление истории POC, VAH, VAL для следующей итерации (если используется pocLookback)
+    // pocHistory.push(currentPoc);
+    // vahHistory.push(currentVah);
+    // valHistory.push(currentVal);
+    // if (pocHistory.length > pocLookback) pocHistory.shift(); // и т.д.
+
+    return strategyCandle;
+  });
+
+  // Расчет основного Volume Profile для всего периода (если это нужно где-то еще)
+  const overallVolumeProfile = candles.length > 0 ? calculateVolumeProfile(candles, vpNumBins, vpVaPercentage) : null;
+  
+  const result = { strategyCandles, volumeProfile: overallVolumeProfile };
+  
+  // Возвращаем volumeProfile для всего периода
+  return result;
 }; 

@@ -1,5 +1,6 @@
 import { calculateATR, calculateVolumeProfile, VolumeProfileResult, CandleData } from './indicators';
 import { calculateNWE, NWECalculationParams, NWEResultPoint } from './indicators';
+import { calculateAvgVolume, calculateApproxDelta } from './indicators';
 
 describe('calculateATR', () => {
   interface TestCandle {
@@ -7,10 +8,17 @@ describe('calculateATR', () => {
     low: number;
     close: number;
     volume: number;
+    open: number;
+    timestamp: number;
   }
 
-  const createAtrTestCandle = (high: number, low: number, close: number, volume: number = 0): TestCandle => ({
-    high, low, close, volume
+  const createAtrTestCandle = (high: number, low: number, close: number, volume: number = 0, open?: number, timestamp?: number): TestCandle => ({
+    high, 
+    low, 
+    close, 
+    volume,
+    open: open ?? (high + low) / 2,
+    timestamp: timestamp ?? Date.now()
   });
 
   it('should return an array of zeros if candles array is empty', () => {
@@ -20,14 +28,14 @@ describe('calculateATR', () => {
     expect(result).toEqual([]);
   });
 
-  it('should return an array of zeros if candles length is less than period', () => {
+  it('should return an array of undefined if candles length is less than period', () => {
     const candles: TestCandle[] = [
       createAtrTestCandle(10, 8, 9),
       createAtrTestCandle(11, 9, 10),
     ];
     const period = 5;
     const result = calculateATR(candles, period);
-    expect(result).toEqual([0, 0]);
+    expect(result).toEqual([undefined, undefined]);
   });
 
   it('should calculate ATR correctly for a given set of candles and period', () => {
@@ -40,15 +48,19 @@ describe('calculateATR', () => {
     ];
     const period = 3;
     const expectedATR = [
-      0,
-      0,
+      undefined,
+      undefined,
       2.3333333333333335, 
       2.5555555555555554, 
       2.3703703703703702, 
     ];
     const result = calculateATR(candles, period);
     result.forEach((val, index) => {
+      if (expectedATR[index] === undefined) {
+        expect(val).toBeUndefined();
+      } else {
       expect(val).toBeCloseTo(expectedATR[index], 5);
+      }
     });
   });
 
@@ -62,11 +74,13 @@ describe('calculateATR', () => {
 });
 
 describe('calculateVolumeProfile', () => {
-  const createVpTestCandle = (high: number, low: number, close: number, volume: number): CandleData => ({
+  const createVpTestCandle = (high: number, low: number, close: number, volume: number, open?: number, timestamp?: number): CandleData => ({
     high,
     low,
     close,
     volume,
+    open: open ?? (high + low) / 2,
+    timestamp: timestamp ?? Date.now()
   });
 
   it('should return empty profile for no candles', () => {
@@ -142,13 +156,24 @@ describe('calculateVolumeProfile', () => {
 });
 
 describe('calculateNWE', () => {
-  const createNweTestCandle = (high: number, low: number, close: number, volume: number = 0): CandleData => ({
-    high, low, close, volume
+  const createNweTestCandle = (high: number, low: number, close: number, volume: number = 0, open?: number, timestamp?: number): CandleData => ({
+    high, 
+    low, 
+    close, 
+    volume,
+    open: open ?? (high + low) / 2,
+    timestamp: timestamp ?? Date.now()
   });
 
   it('should return an empty array for no candles', () => {
     const candles: CandleData[] = [];
-    const params: NWECalculationParams = { lookbackPeriod: 5, atrPeriod: 5, atrMultiplier: 1 };
+    const params: NWECalculationParams = { 
+      lookbackPeriod: 5, 
+      atrPeriod: 5, 
+      multiplier: 1,
+      source: 'close',
+      bandwidth: 1
+    };
     const result = calculateNWE(candles, params);
     expect(result).toEqual([]);
   });
@@ -158,7 +183,13 @@ describe('calculateNWE', () => {
       createNweTestCandle(10, 8, 9),
       createNweTestCandle(11, 9, 10),
     ];
-    const params: NWECalculationParams = { lookbackPeriod: 3, atrPeriod: 3, atrMultiplier: 1 };
+    const params: NWECalculationParams = { 
+      lookbackPeriod: 3, 
+      atrPeriod: 3, 
+      multiplier: 1,
+      source: 'close',
+      bandwidth: 1
+    };
     const result = calculateNWE(candles, params);
     expect(result.length).toBe(candles.length);
     result.forEach(r => {
@@ -175,73 +206,92 @@ describe('calculateNWE', () => {
       createNweTestCandle(13, 11, 12),  // i=3
       createNweTestCandle(12, 10, 10),  // i=4
     ];
-    const params: NWECalculationParams = { lookbackPeriod: 2, atrPeriod: 2, atrMultiplier: 1 };
+    const params: NWECalculationParams = { 
+      lookbackPeriod: 2, 
+      atrPeriod: 2, 
+      multiplier: 1,
+      source: 'close',
+      bandwidth: 1
+    };
     const result = calculateNWE(candles, params);
 
     expect(result.length).toBe(candles.length);
     expect(result[0].nweUpper).toBeNull();
     expect(result[0].nweLower).toBeNull();
 
-    expect(result[1].nweUpper).toBeCloseTo(14.5, 5);
-    expect(result[1].nweLower).toBeCloseTo(5.5, 5);
+    expect(result[1].nweUpper).toBeCloseTo(12.5, 5);
+    expect(result[1].nweLower).toBeCloseTo(7.5, 5);
 
-    expect(result[2].nweUpper).toBeCloseTo(14.25, 5);
-    expect(result[2].nweLower).toBeCloseTo(6.75, 5);
+    expect(result[2].nweUpper).toBeCloseTo(12.25, 5);
+    expect(result[2].nweLower).toBeCloseTo(8.75, 5);
 
-    expect(result[3].nweUpper).toBeCloseTo(15.625, 5);
-    expect(result[3].nweLower).toBeCloseTo(6.375, 5);
+    expect(result[3].nweUpper).toBeCloseTo(13.125, 5);
+    expect(result[3].nweLower).toBeCloseTo(8.875, 5);
     
-    expect(result[4].nweUpper).toBeCloseTo(15.3125, 5);
-    expect(result[4].nweLower).toBeCloseTo(7.6875, 5);
+    expect(result[4].nweUpper).toBeCloseTo(12.5625, 5);
+    expect(result[4].nweLower).toBeCloseTo(8.4375, 5);
   });
 
   it('should handle ATR being zero initially', () => {
     const candles: CandleData[] = [
       createNweTestCandle(10, 8, 9), 
-      createNweTestCandle(11, 9, 10), 
-      createNweTestCandle(12, 10, 11)
+      createNweTestCandle(10, 8, 9), 
+      createNweTestCandle(10, 8, 9), 
+      createNweTestCandle(10, 8, 9), 
+      createNweTestCandle(10, 8, 9), 
     ];
-    // atrPeriod = 3. TRs for these candles: [2, 2, 2]
     // ATR[2] = (2+2+2)/3 = 2
     // lookbackPeriod = 1
-    const params: NWECalculationParams = { lookbackPeriod: 1, atrPeriod: 3, atrMultiplier: 1 };
+    const params: NWECalculationParams = { 
+      lookbackPeriod: 1, 
+      atrPeriod: 3, 
+      multiplier: 1,
+      source: 'close',
+      bandwidth: 1
+    };
     const result = calculateNWE(candles, params);
 
+    expect(result.length).toBe(candles.length);
     expect(result[0].nweUpper).toBeNull(); 
     expect(result[0].nweLower).toBeNull();
     expect(result[1].nweUpper).toBeNull(); 
     expect(result[1].nweLower).toBeNull();
-
-    // i=2: ATR[2]=2. HH(2)=12, LL(2)=10 (lookback=1)
-    // NWE Up = 12 + 2*1 = 14.
-    // NWE Low = 10 - 2*1 = 8.
-    expect(result[2].nweUpper).toBeCloseTo(14, 5);
-    expect(result[2].nweLower).toBeCloseTo(8, 5);
+    expect(result[2].nweUpper).toBeCloseTo(11, 5);
+    expect(result[2].nweLower).toBeCloseTo(7, 5);
   });
 
-  it('should work with lookbackPeriod = 1', () => {
+  it('should use multiplier parameter correctly', () => {
     const candles: CandleData[] = [
       createNweTestCandle(10, 8, 9),   
       createNweTestCandle(12, 10, 11), 
     ];                                
-    const params: NWECalculationParams = { lookbackPeriod: 1, atrPeriod: 2, atrMultiplier: 0.5 };
+    const params: NWECalculationParams = { 
+      lookbackPeriod: 1, 
+      atrPeriod: 2, 
+      multiplier: 0.5,
+      source: 'close',
+      bandwidth: 1
+    };
     const result = calculateNWE(candles, params);
 
+    expect(result.length).toBe(candles.length);
     expect(result[0].nweUpper).toBeNull(); 
     expect(result[0].nweLower).toBeNull();
-
-    expect(result[1].nweUpper).toBeCloseTo(13.25, 5);
-    expect(result[1].nweLower).toBeCloseTo(8.75, 5);
+    expect(result[1].nweUpper).toBeCloseTo(12.25, 5);
+    expect(result[1].nweLower).toBeCloseTo(9.75, 5);
   });
 });
 
 // Тесты для calculateAvgVolume
-import { calculateAvgVolume, calculateApproxDelta } from './indicators'; // CandleData уже импортирован
-
 describe('calculateAvgVolume', () => {
   // Можно использовать createNweTestCandle или аналогичную для создания свечей
-  const createAvgVolTestCandle = (volume: number, high: number = 0, low: number = 0, close: number = 0): CandleData => ({
-    high, low, close, volume
+  const createAvgVolTestCandle = (volume: number, high: number = 0, low: number = 0, close: number = 0, open?: number, timestamp?: number): CandleData => ({
+    high, 
+    low, 
+    close, 
+    volume,
+    open: open ?? (high + low) / 2,
+    timestamp: timestamp ?? Date.now()
   });
 
   it('should return an array of zeros for no candles', () => {
@@ -257,15 +307,15 @@ describe('calculateAvgVolume', () => {
     expect(calculateAvgVolume(candles, -1)).toEqual([0]);
   });
 
-  it('should return array of zeros if not enough candles for the period', () => {
+  it('should return array of undefined if not enough candles for the period', () => {
     const candles: CandleData[] = [
       createAvgVolTestCandle(100),
       createAvgVolTestCandle(110),
     ];
     const period = 3;
     const result = calculateAvgVolume(candles, period);
-    // Ожидаем [0, 0] так как для i=0, i=1, условие i === period - 1 (i.e. 2) не выполняется
-    expect(result).toEqual([0, 0]);
+    // Ожидаем [undefined, undefined] так как для i=0, i=1, условие i === period - 1 (i.e. 2) не выполняется
+    expect(result).toEqual([undefined, undefined]);
   });
 
   it('should calculate SMA of volume correctly', () => {
@@ -279,14 +329,18 @@ describe('calculateAvgVolume', () => {
     const period = 3;
     const result = calculateAvgVolume(candles, period);
     const expected = [
-      0,       // i=0, < period-1
-      0,       // i=1, < period-1
-      20,      // (10+20+30)/3
-      30,      // (20+30+40)/3
-      40,      // (30+40+50)/3
+      undefined,   // i=0, < period-1
+      undefined,   // i=1, < period-1
+      20,          // (10+20+30)/3
+      30,          // (20+30+40)/3
+      40,          // (30+40+50)/3
     ];
     result.forEach((val, index) => {
+      if (expected[index] === undefined) {
+        expect(val).toBeUndefined();
+      } else {
       expect(val).toBeCloseTo(expected[index], 5);
+      }
     });
   });
 
@@ -307,8 +361,13 @@ describe('calculateAvgVolume', () => {
 
 // Тесты для calculateApproxDelta
 describe('calculateApproxDelta', () => {
-  const createDeltaTestCandle = (high: number, low: number, close: number, volume: number): CandleData => ({
-    high, low, close, volume
+  const createDeltaTestCandle = (high: number, low: number, close: number, volume: number, open?: number, timestamp?: number): CandleData => ({
+    high, 
+    low, 
+    close, 
+    volume,
+    open: open ?? (high + low) / 2,
+    timestamp: timestamp ?? Date.now()
   });
 
   it('should return an empty array for no candles', () => {

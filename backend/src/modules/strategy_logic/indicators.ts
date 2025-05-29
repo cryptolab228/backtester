@@ -12,14 +12,16 @@ export interface CandleData {
   // ... могут быть и другие поля
 }
 
-export const calculateATR = (candles: CandleData[], period: number): number[] => {
-  if (!candles || candles.length < period) {
-    // Возвращаем массив нулей той же длины, если данных недостаточно
-    // или можно выбросить ошибку, в зависимости от предпочтений.
-    return new Array(candles?.length || 0).fill(0);
+export const calculateATR = (candles: CandleData[], period: number): (number | undefined)[] => {
+  if (!candles || candles.length === 0) { // Проверка на пустой массив свечей
+    return [];
+  }
+  // Если свечей меньше, чем нужно для первого расчета ATR, возвращаем undefined для всех
+  if (candles.length < period) {
+    return new Array(candles.length).fill(undefined);
   }
 
-  const atrValues: number[] = new Array(candles.length).fill(0);
+  const atrValues: (number | undefined)[] = new Array(candles.length).fill(undefined);
   const trueRanges: number[] = new Array(candles.length).fill(0);
 
   // 1. Рассчитать True Range (TR) для каждой свечи
@@ -45,7 +47,7 @@ export const calculateATR = (candles: CandleData[], period: number): number[] =>
   // Последующие ATR рассчитываются по формуле Wilder's smoothing
   // Current ATR = ((Previous ATR * (period - 1)) + Current TR) / period
   for (let i = period; i < candles.length; i++) {
-    atrValues[i] = (atrValues[i - 1] * (period - 1) + trueRanges[i]) / period;
+    atrValues[i] = (atrValues[i - 1]! * (period - 1) + trueRanges[i]) / period; // Добавлен non-null assertion т.к. atrValues[i-1] должен быть числом на этом этапе
   }
 
   return atrValues;
@@ -249,88 +251,109 @@ export const calculateVolumeProfile = (
 
 // Интерфейс для параметров NWE, используемых в calculateNWE
 export interface NWECalculationParams {
+  source: 'open' | 'high' | 'low' | 'close' | 'hl2' | 'hlc3' | 'ohlc4';
+  bandwidth: number;
+  multiplier: number; // Этот параметр используется для ATR в NWE
   lookbackPeriod: number;
-  atrPeriod: number;
-  atrMultiplier: number;
+  atrPeriod: number; // Этот параметр используется для ATR в NWE
+  // atrMultiplier не нужен здесь, т.к. multiplier уже есть для NWE Bands
 }
 
 export interface NWEResultPoint {
   nweUpper: number | null;
   nweLower: number | null;
+  params: NWECalculationParams
 }
 
 export const calculateNWE = (
   candles: CandleData[],
   params: NWECalculationParams
 ): NWEResultPoint[] => {
-  const { lookbackPeriod, atrPeriod, atrMultiplier } = params;
-  const numCandles = candles.length;
+  if (!candles || candles.length === 0) return [];
 
-  if (numCandles === 0) {
-    return [];
-  }
+  const atrValues = calculateATR(candles, params.atrPeriod);
+  const results: NWEResultPoint[] = [];
 
-  const atrValues = calculateATR(candles, atrPeriod);
-  const nweResults: NWEResultPoint[] = new Array(numCandles).fill(null).map(() => ({ nweUpper: null, nweLower: null }));
+  // Простая скользящая средняя для базовой линии NWE
+  const sma = (data: number[], period: number): (number | null)[] => {
+    const out: (number | null)[] = new Array(data.length).fill(null);
+    if (data.length < period) return out;
+    let sum = 0;
+    for (let i = 0; i < period; i++) {
+      sum += data[i];
+    }
+    out[period - 1] = sum / period;
+    for (let i = period; i < data.length; i++) {
+      sum = sum - data[i - period] + data[i];
+      out[i] = sum / period;
+    }
+    return out;
+  };
 
-  // Начинаем расчет с индекса, где достаточно данных для первого ATR и lookbackPeriod
-  // Первый ATR рассчитывается для свечи с индексом (atrPeriod - 1)
-  // Первый полный lookback возможен для свечи с индексом (lookbackPeriod - 1)
-  const startIdx = Math.max(atrPeriod - 1, lookbackPeriod - 1);
+  const getSourceData = (candle: CandleData): number => {
+    switch (params.source) {
+      case 'open': return candle.open;
+      case 'high': return candle.high;
+      case 'low': return candle.low;
+      case 'hl2': return (candle.high + candle.low) / 2;
+      case 'hlc3': return (candle.high + candle.low + candle.close) / 3;
+      case 'ohlc4': return (candle.open + candle.high + candle.low + candle.close) / 4;
+      case 'close':
+      default: return candle.close;
+    }
+  };
 
-  for (let i = 0; i < numCandles; i++) {
-    if (i < startIdx || atrValues[i] === 0) {
-      // Недостаточно данных или ATR равен 0, оставляем null
+  const sourcePrices = candles.map(getSourceData);
+  const baseLineSma = sma(sourcePrices, params.lookbackPeriod); // Используем lookbackPeriod для SMA
+
+  for (let i = 0; i < candles.length; i++) {
+    const atr = atrValues[i];
+    const baseSma = baseLineSma[i];
+
+    if (atr === undefined || atr === null || atr === 0 || baseSma === null) {
+      results.push({ nweUpper: null, nweLower: null, params });
       continue;
     }
 
-    const lookbackStart = Math.max(0, i - lookbackPeriod + 1);
-    const currentLookbackCandles = candles.slice(lookbackStart, i + 1);
-
-    if (currentLookbackCandles.length === 0) {
-        continue;
-    }
-
-    let highestHighInLookback = currentLookbackCandles[0].high;
-    let lowestLowInLookback = currentLookbackCandles[0].low;
-
-    for (let j = 1; j < currentLookbackCandles.length; j++) {
-      if (currentLookbackCandles[j].high > highestHighInLookback) {
-        highestHighInLookback = currentLookbackCandles[j].high;
-      }
-      if (currentLookbackCandles[j].low < lowestLowInLookback) {
-        lowestLowInLookback = currentLookbackCandles[j].low;
-      }
-    }
-
-    const atrOffset = atrValues[i] * atrMultiplier;
-    nweResults[i] = {
-      nweUpper: highestHighInLookback + atrOffset,
-      nweLower: lowestLowInLookback - atrOffset,
-    };
+    // Расчет Nadaraya-Watson Kernel Regression (упрощенный для NWE Bands)
+    // В классическом NWE используется более сложный kernel. Здесь мы просто используем SMA как базовую линию.
+    // и добавляем/вычитаем ATR, умноженный на params.multiplier и params.bandwidth.
+    // params.bandwidth здесь может влиять на чувствительность канала.
+    const offset = atr * params.multiplier * params.bandwidth; 
+    results.push({
+      nweUpper: baseSma + offset,
+      nweLower: baseSma - offset,
+      params,
+    });
   }
-
-  return nweResults;
+  return results;
 };
 
-export const calculateAvgVolume = (candles: CandleData[], period: number): number[] => {
-  if (!candles || candles.length < period || period <= 0) {
-    return new Array(candles?.length || 0).fill(0);
+export const calculateAvgVolume = (candles: CandleData[], period: number): (number | undefined)[] => {
+  if (!candles || candles.length === 0) { // Проверка на пустой массив
+    return [];
+  }
+  
+  // Проверка на некорректный период
+  if (period <= 0) {
+    return new Array(candles.length).fill(0);
+  }
+  
+  if (candles.length < period) {
+    return new Array(candles.length).fill(undefined);
   }
 
-  const avgVolumeValues: number[] = new Array(candles.length).fill(0);
-  let currentSum = 0;
+  const avgVolumeValues: (number | undefined)[] = new Array(candles.length).fill(undefined);
+  let sumVolume = 0;
 
-  // Рассчитать сумму для первого окна
-  for (let i = 0; i < period; i++) {
-    currentSum += candles[i].volume;
+  for (let i = 0; i < period -1; i++) { // Суммируем объемы для первых period-1 свечей
+    sumVolume += candles[i].volume;
   }
-  avgVolumeValues[period - 1] = currentSum / period;
 
-  // Рассчитать скользящее среднее для остальных свечей
-  for (let i = period; i < candles.length; i++) {
-    currentSum = currentSum - candles[i - period].volume + candles[i].volume;
-    avgVolumeValues[i] = currentSum / period;
+  for (let i = period - 1; i < candles.length; i++) {
+    sumVolume += candles[i].volume;
+    avgVolumeValues[i] = sumVolume / period;
+    sumVolume -= candles[i - (period - 1)].volume; // Вычитаем самый старый объем из суммы
   }
 
   return avgVolumeValues;

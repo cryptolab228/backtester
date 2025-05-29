@@ -82,4 +82,83 @@ export interface BacktestResult {
   configUsed?: BacktestRunParameters; 
   // Опционально можно возвращать свечи с индикаторами для отладки/графиков
   strategyCandles?: StrategyCandle[]; 
+}
+
+// === НОВЫЕ ТИПЫ ДЛЯ МУЛЬТИ-БЕКТЕСТЕРА ===
+
+// Параметры для запуска портфельного бэктеста
+export interface PortfolioBacktestRunParameters {
+  pairSymbols: string[]; // Массив торговых пар
+  timeframe: string;
+  startDate: string;
+  endDate: string;
+  initialPortfolioCapital: number;
+  strategyParameters: StrategyParameters;
+  portfolioSettings?: PortfolioSettings;
+}
+
+// Настройки для портфельного бектеста
+export interface PortfolioSettings {
+  maxConcurrentTradesPortfolio?: number; // Максимальное количество одновременных сделок в портфеле
+}
+
+// Точка данных для кривой эквити портфеля
+export interface EquityDataPoint {
+  timestamp: number;
+  capital: number;
+}
+
+// Метрики портфеля (расширенные метрики для мульти-бектеста)
+export interface PortfolioMetrics {
+  totalPortfolioPnl: number;
+  totalPortfolioPnlPercentage: number;
+  totalPortfolioTrades: number;
+  portfolioWinningTrades: number;
+  portfolioLosingTrades: number;
+  portfolioWinRate: number;
+  portfolioProfitFactor: number;
+  portfolioMaxDrawdown: number;
+  portfolioGrossProfit: number;
+  portfolioGrossLoss: number;
+  portfolioAverageTradePnl: number;
+  portfolioExpectancy: number;
+  
+  // Новые специфичные для портфеля метрики
+  sharpeRatioPortfolio: number; // Коэффициент Шарпа портфеля
+  avgConcurrentTrades: number; // Среднее количество одновременных сделок
+  peakConcurrentTrades: number; // Пиковое количество одновременных сделок
+  
+  initialPortfolioCapital: number;
+  finalPortfolioCapital: number;
+  portfolioEquityCurve: EquityDataPoint[];
+  durationMs: number;
+}
+
+// Результат портфельного бектеста
+export interface PortfolioBacktestResult {
+  jobId?: string;
+  status?: 'queued' | 'running' | 'completed' | 'failed';
+  message?: string;
+  
+  // Общие метрики портфеля
+  overallMetrics: PortfolioMetrics;
+  
+  // Детализация по парам
+  tradesByPair: Record<string, Trade[]>; // Ключ = символ пары, значение = массив сделок
+  metricsByPair: Record<string, BacktestMetrics>; // Метрики по каждой паре отдельно
+  
+  // Конфигурация и метаданные
+  configUsed?: PortfolioBacktestRunParameters;
+  logs?: string[];
+  
+  // Опционально: детальные данные по свечам для каждой пары
+  strategyCandlesByPair?: Record<string, StrategyCandle[]>;
+}
+
+// === КОНЕЦ НОВЫХ ТИПОВ ===
+
+// Типы ошибок для API
+export interface BacktestError {
+  message: string;
+  details?: any;
 } 

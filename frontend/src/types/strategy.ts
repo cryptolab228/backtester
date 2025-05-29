@@ -123,4 +123,64 @@ export interface BacktestResult {
   trades: Trade[];
   logs?: string[]; // Optional logs from the backtest run
   configUsed?: BacktestRunParameters; // To know what params generated this result
+}
+
+// Interfaces for Portfolio Backtesting (Multi-Backtester)
+
+export interface PortfolioSettings {
+  maxConcurrentTradesPortfolio?: number;
+}
+
+export interface PortfolioBacktestRunParameters {
+  pairSymbols: string[]; // Array of trading pairs
+  timeframe: string;
+  startDate: string; // ISO string date
+  endDate: string;   // ISO string date
+  initialPortfolioCapital: number;
+  strategyParameters: StrategyParameters;
+  portfolioSettings?: PortfolioSettings;
+}
+
+export interface PortfolioMetrics {
+  // Portfolio-level metrics
+  totalPortfolioTrades: number;
+  totalPortfolioPnl: number;
+  portfolioWinRate: number;
+  initialPortfolioCapital: number;
+  finalPortfolioCapital: number;
+  
+  // Portfolio-specific metrics
+  sharpeRatioPortfolio: number;
+  avgConcurrentTrades: number;
+  peakConcurrentTrades: number;
+  
+  // Portfolio equity curve
+  portfolioEquityCurve: { timestamp: number; capital: number }[];
+  
+  // Duration
+  durationMs: number;
+  
+  [key: string]: any; // Additional dynamic metrics
+}
+
+export interface PortfolioBacktestResult {
+  // Overall portfolio metrics
+  overallMetrics: PortfolioMetrics;
+  
+  // Trades grouped by trading pair
+  tradesByPair: Record<string, Trade[]>;
+  
+  // Individual metrics for each pair
+  metricsByPair: Record<string, BacktestMetrics>;
+  
+  // Configuration used for this backtest
+  configUsed?: PortfolioBacktestRunParameters;
+  
+  // Optional: strategy candles by pair (for debugging/analysis)
+  strategyCandlesByPair?: Record<string, any[]>;
+  
+  // Job and status info
+  jobId?: string;
+  status?: 'queued' | 'running' | 'completed' | 'failed';
+  message?: string;
 } 

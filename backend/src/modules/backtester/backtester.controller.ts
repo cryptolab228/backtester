@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import { runBacktest } from './backtester'; // Основная логика бэктестинга
-import { BacktestRunParameters, BacktestResult, StrategyParameters } from './backtester.types'; // Предполагается, что эти типы определены или будут определены
+import { runBacktest, runPortfolioBacktest } from './backtester'; // Основная логика бэктестинга
+import { BacktestRunParameters, BacktestResult, StrategyParameters, PortfolioBacktestRunParameters, PortfolioBacktestResult } from './backtester.types'; // Предполагается, что эти типы определены или будут определены
 import { CandleData } from '../../interfaces/marketData.interface'; // Исправленный путь
 import { getDefaultStrategyParameters } from '../../config/defaultStrategyParameters'; // Исправленный путь
 import { dataService } from '../../services/dataService'; // <-- Импорт dataService
@@ -158,5 +158,186 @@ export const runBacktestHandler = async (req: Request, res: Response): Promise<v
   } catch (error: any) {
     logger.error('[BacktesterCtrl] Error during backtest execution:', { message: error.message, stack: error.stack, requestBody: req.body });
     res.status(500).json({ message: 'Internal server error during backtest', error: error.message });
+  }
+}; 
+
+// === МУЛЬТИ-БЕКТЕСТЕР (ПОРТФЕЛЬНЫЙ БЕКТЕСТЕР) ===
+
+export const runPortfolioBacktestHandler = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const incomingParams: PortfolioBacktestRunParameters = req.body;
+    logger.info(`[PortfolioBacktesterCtrl] Received portfolio backtest request for pairs: ${incomingParams.pairSymbols?.join(', ')} from ${incomingParams.startDate} to ${incomingParams.endDate}`);
+    logger.debug('[PortfolioBacktesterCtrl] Full incoming req.body:', req.body);
+
+    // Валидация базовых параметров
+    if (!incomingParams.pairSymbols || !Array.isArray(incomingParams.pairSymbols) || incomingParams.pairSymbols.length === 0) {
+      logger.warn('[PortfolioBacktesterCtrl] No pair symbols provided or empty array.');
+      res.status(400).json({ message: 'pairSymbols must be a non-empty array of trading pair symbols.' });
+      return;
+    }
+
+    if (!incomingParams.timeframe || !incomingParams.startDate || !incomingParams.endDate || !incomingParams.initialPortfolioCapital) {
+      logger.warn('[PortfolioBacktesterCtrl] Missing basic parameters for portfolio backtest.', incomingParams);
+      res.status(400).json({ message: 'Missing required basic portfolio backtest parameters.' });
+      return;
+    }
+
+    if (incomingParams.initialPortfolioCapital <= 0) {
+      logger.warn('[PortfolioBacktesterCtrl] Initial portfolio capital must be positive.', { capital: incomingParams.initialPortfolioCapital });
+      res.status(400).json({ message: 'Initial portfolio capital must be positive.' });
+      return;
+    }
+
+    // Получаем и валидируем параметры стратегии
+    let strategyParamsToUse: StrategyParameters;
+    if (incomingParams.strategyParameters && 
+        typeof incomingParams.strategyParameters === 'object' && 
+        Object.keys(incomingParams.strategyParameters).length > 0 &&
+        incomingParams.strategyParameters.dlc && 
+        incomingParams.strategyParameters.risk   
+    ) {
+      logger.info('[PortfolioBacktesterCtrl] Using strategyParameters from request body.');
+      try {
+        strategyParamsToUse = JSON.parse(JSON.stringify(incomingParams.strategyParameters));
+        logger.debug('[PortfolioBacktesterCtrl] Successfully deep copied strategyParameters from request.');
+      } catch (e: any) {
+        logger.error('[PortfolioBacktesterCtrl] Failed to deep copy strategyParameters from request. Using defaults.', e.message);
+        strategyParamsToUse = getDefaultStrategyParameters();
+      }
+    } else {
+      logger.warn('[PortfolioBacktesterCtrl] strategyParameters missing, empty, or incomplete in request. Using default strategy parameters.');
+      strategyParamsToUse = getDefaultStrategyParameters();
+    }
+
+    // Преобразование дат в timestamp
+    const startTimestamp = new Date(incomingParams.startDate).getTime();
+    const endTimestamp = new Date(incomingParams.endDate).getTime();
+
+    if (isNaN(startTimestamp) || isNaN(endTimestamp)) {
+        logger.warn('[PortfolioBacktesterCtrl] Invalid date format for startDate or endDate.', { startDate: incomingParams.startDate, endDate: incomingParams.endDate });
+        res.status(400).json({ message: 'Invalid date format for start or end date.' });
+        return;
+    }
+
+    // Проверяем существование всех торговых пар
+    const existingPairs: string[] = [];
+    const missingPairs: string[] = [];
+    
+    for (const pairSymbol of incomingParams.pairSymbols) {
+      const tradingPair = await dataService.getTradingPairBySymbol(pairSymbol);
+      if (tradingPair) {
+        existingPairs.push(pairSymbol);
+      } else {
+        missingPairs.push(pairSymbol);
+      }
+    }
+
+    if (missingPairs.length > 0) {
+      logger.warn(`[PortfolioBacktesterCtrl] Some trading pairs not found in DB: ${missingPairs.join(', ')}`);
+      res.status(404).json({ 
+        message: `Trading pairs not found: ${missingPairs.join(', ')}. Please add them first.`,
+        existingPairs,
+        missingPairs
+      });
+      return;
+    }
+
+    // Загрузка данных для всех пар
+    const candlesByPair: Record<string, CandleData[]> = {};
+    const pairsNeedingData: string[] = [];
+
+    logger.info(`[PortfolioBacktesterCtrl] Fetching candles for ${existingPairs.length} pairs from ${new Date(startTimestamp)} to ${new Date(endTimestamp)}`);
+
+    for (const pairSymbol of existingPairs) {
+      const candlesFromDB = await dataService.getCandles(pairSymbol, incomingParams.timeframe, startTimestamp, endTimestamp);
+      logger.info(`[PortfolioBacktesterCtrl] Fetched ${candlesFromDB.length} candles for ${pairSymbol} (${incomingParams.timeframe}).`);
+
+      // Проверка достаточности данных
+      const firstCandleTime = candlesFromDB.length > 0 ? Number(candlesFromDB[0].timestamp) : null;
+      const lastCandleTime = candlesFromDB.length > 0 ? Number(candlesFromDB[candlesFromDB.length - 1].timestamp) : null;
+
+      const needsFetching = candlesFromDB.length === 0 || 
+                            (firstCandleTime && firstCandleTime > startTimestamp) || 
+                            (lastCandleTime && lastCandleTime < endTimestamp);
+
+      if (needsFetching) {
+        pairsNeedingData.push(pairSymbol);
+        logger.warn(`[PortfolioBacktesterCtrl] Insufficient candle data for ${pairSymbol} (${incomingParams.timeframe}) in range.`);
+      } else {
+        // Адаптация данных
+        candlesByPair[pairSymbol] = candlesFromDB.map(c => ({
+          timestamp: Number(c.timestamp),
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+          volume: c.volume,
+        }));
+      }
+    }
+
+    // Если нужно дозагрузить данные для некоторых пар
+    if (pairsNeedingData.length > 0) {
+      logger.warn(`[PortfolioBacktesterCtrl] Some pairs need data fetching: ${pairsNeedingData.join(', ')}. Queuing portfolio backtest job.`);
+      
+      const jobData = {
+        portfolioParams: { ...incomingParams, strategyParameters: strategyParamsToUse },
+        pairsNeedingData,
+        startTimestamp,
+        endTimestamp
+      };
+
+      try {
+        // Создадим новый тип задачи для портфельного бектестинга
+        await dataQueue.add('FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST', jobData);
+        logger.info(`[PortfolioBacktesterCtrl] Successfully queued portfolio backtest job for pairs: ${pairsNeedingData.join(', ')}`);
+        res.status(202).json({ 
+          message: `Portfolio backtest queued. Data is being fetched for pairs: ${pairsNeedingData.join(', ')}.`,
+          jobDetails: { 
+            pairsNeedingData, 
+            pairsReady: existingPairs.filter(p => !pairsNeedingData.includes(p)),
+            timeframe: incomingParams.timeframe, 
+            range: `${new Date(startTimestamp)} - ${new Date(endTimestamp)}` 
+          }
+        });
+      } catch (queueError: any) {
+        logger.error(`[PortfolioBacktesterCtrl] Failed to queue portfolio backtest job: ${queueError.message}`, queueError);
+        res.status(500).json({ message: 'Failed to queue portfolio backtest job. Please try again later.' });
+      }
+      return;
+    }
+
+    // Если все данные готовы, запускаем портфельный бектест
+    logger.info(`[PortfolioBacktesterCtrl] All candle data ready. Running portfolio backtest for ${existingPairs.length} pairs.`);
+
+    const portfolioParams: PortfolioBacktestRunParameters = {
+      pairSymbols: existingPairs,
+      timeframe: incomingParams.timeframe,
+      startDate: incomingParams.startDate, 
+      endDate: incomingParams.endDate,     
+      initialPortfolioCapital: incomingParams.initialPortfolioCapital,
+      strategyParameters: strategyParamsToUse,
+      portfolioSettings: incomingParams.portfolioSettings || {}
+    };
+    
+    logger.debug('[PortfolioBacktesterCtrl] Parameters being sent to runPortfolioBacktest:', portfolioParams);
+
+    logger.info('[PortfolioBacktesterCtrl] Starting portfolio backtest execution...');
+    const result = await runPortfolioBacktest(portfolioParams, candlesByPair);
+    logger.info(`[PortfolioBacktesterCtrl] Portfolio backtest finished. Total trades: ${result.overallMetrics.totalPortfolioTrades}, Total PnL: ${result.overallMetrics.totalPortfolioPnl}`);
+
+    const responsePayload: PortfolioBacktestResult = {
+      overallMetrics: result.overallMetrics,
+      tradesByPair: result.tradesByPair,
+      metricsByPair: result.metricsByPair,
+      configUsed: portfolioParams,
+      strategyCandlesByPair: result.strategyCandlesByPair
+    };
+
+    res.status(200).json(responsePayload);
+
+  } catch (error: any) {
+    logger.error('[PortfolioBacktesterCtrl] Error during portfolio backtest execution:', { message: error.message, stack: error.stack, requestBody: req.body });
+    res.status(500).json({ message: 'Internal server error during portfolio backtest', error: error.message });
   }
 }; 

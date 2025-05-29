@@ -4,8 +4,8 @@ import { createWorker, DATA_QUEUE_NAME, dataQueue, broadcastJobCounts } from '@/
 import * as okxService from '@/services/okxService';
 import { dataService } from '@/services/dataService';
 import { broadcast } from '@/websocket';
-import { runBacktest } from '@/modules/backtester/backtester';
-import type { BacktestRunParameters } from '@/modules/backtester/backtester.types';
+import { runBacktest, runPortfolioBacktest } from '@/modules/backtester/backtester';
+import type { BacktestRunParameters, PortfolioBacktestRunParameters } from '@/modules/backtester/backtester.types';
 import type { CandleData } from '@/interfaces/marketData.interface';
 
 // Интерфейсы для данных задач
@@ -31,13 +31,22 @@ interface FetchCandlesAndRunBacktestJobData {
   isUserPaused?: boolean;
 }
 
-type DataJobData = FetchPairsJobData | FetchCandlesJobData | FetchCandlesAndRunBacktestJobData;
+interface FetchPortfolioDataAndRunBacktestJobData {
+  portfolioParams: PortfolioBacktestRunParameters;
+  pairsNeedingData: string[];
+  startTimestamp: number;
+  endTimestamp: number;
+  isUserPaused?: boolean;
+}
+
+type DataJobData = FetchPairsJobData | FetchCandlesJobData | FetchCandlesAndRunBacktestJobData | FetchPortfolioDataAndRunBacktestJobData;
 
 // Константы для имен задач
 export const JOB_TYPES = {
   FETCH_PAIRS: 'fetch-pairs',
   FETCH_CANDLES: 'fetch-candles',
   FETCH_CANDLES_AND_RUN_BACKTEST: 'fetch-candles-and-run-backtest',
+  FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST: 'FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST',
 } as const;
 
 /**
@@ -178,6 +187,109 @@ const processFetchCandlesAndRunBacktest = async (job: Job<FetchCandlesAndRunBack
   }
 };
 
+// Обработчик для портфельного бектестинга FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST
+const processFetchPortfolioDataAndRunBacktest = async (job: Job<FetchPortfolioDataAndRunBacktestJobData>) => {
+  const { portfolioParams, pairsNeedingData, startTimestamp, endTimestamp } = job.data;
+  const jobId = job.id;
+  logger.info(`[Worker] Received job ${JOB_TYPES.FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST} (ID: ${jobId}) for portfolio backtest with ${pairsNeedingData.length} pairs needing data.`);
+  logger.debug(`[Job ${jobId}] Portfolio params:`, portfolioParams);
+  logger.debug(`[Job ${jobId}] Pairs needing data:`, pairsNeedingData);
+
+  try {
+    const candlesByPair: Record<string, CandleData[]> = {};
+
+    // 1. Загрузка данных для пар, которым нужны данные
+    for (const pairSymbol of pairsNeedingData) {
+      logger.info(`[Job ${jobId}] Fetching data for ${pairSymbol} (${portfolioParams.timeframe}) from ${new Date(startTimestamp)} to ${new Date(endTimestamp)}.`);
+      
+      // Загружаем свечи из API
+      const candlesFromAPI = await okxService.getHistoricalCandles(
+        pairSymbol, 
+        portfolioParams.timeframe, 
+        startTimestamp, 
+        endTimestamp
+      );
+      logger.info(`[Job ${jobId}] Fetched ${candlesFromAPI.length} candles from API for ${pairSymbol}.`);
+
+      // Сохраняем в БД
+      if (candlesFromAPI.length > 0) {
+        await dataService.saveCandles(pairSymbol, portfolioParams.timeframe, candlesFromAPI);
+        logger.info(`[Job ${jobId}] Saved ${candlesFromAPI.length} candles to DB for ${pairSymbol}.`);
+      } else {
+        logger.warn(`[Job ${jobId}] No candles fetched from API for ${pairSymbol}.`);
+      }
+    }
+
+    // 2. Загрузка всех необходимых данных из БД для портфельного бектеста
+    for (const pairSymbol of portfolioParams.pairSymbols) {
+      logger.info(`[Job ${jobId}] Loading candles from DB for ${pairSymbol} (${portfolioParams.timeframe}).`);
+      const candlesFromDB = await dataService.getCandles(
+        pairSymbol, 
+        portfolioParams.timeframe, 
+        startTimestamp, 
+        endTimestamp
+      );
+      
+      if (candlesFromDB && candlesFromDB.length > 0) {
+        // Адаптация данных для портфельного бектестера
+        candlesByPair[pairSymbol] = candlesFromDB.map(c => ({
+          timestamp: Number(c.timestamp),
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+          volume: c.volume,
+        }));
+        logger.info(`[Job ${jobId}] Prepared ${candlesByPair[pairSymbol].length} candles for ${pairSymbol}.`);
+      } else {
+        logger.warn(`[Job ${jobId}] No candles found in DB for ${pairSymbol} after fetch attempt.`);
+        // Устанавливаем пустой массив для пар без данных
+        candlesByPair[pairSymbol] = [];
+      }
+    }
+
+    // 3. Запуск портфельного бектеста
+    const totalCandlesLoaded = Object.values(candlesByPair).reduce((sum, candles) => sum + candles.length, 0);
+    logger.info(`[Job ${jobId}] Starting portfolio backtest with ${totalCandlesLoaded} total candles across ${Object.keys(candlesByPair).length} pairs.`);
+    logger.debug(`[Job ${jobId}] Candles by pair summary:`, Object.fromEntries(
+      Object.entries(candlesByPair).map(([pair, candles]) => [pair, candles.length])
+    ));
+
+    const portfolioBacktestResult = await runPortfolioBacktest(portfolioParams, candlesByPair);
+    logger.info(`[Job ${jobId}] Portfolio backtest finished. Total trades: ${portfolioBacktestResult.overallMetrics.totalPortfolioTrades}, Total PnL: ${portfolioBacktestResult.overallMetrics.totalPortfolioPnl}.`);
+
+    // 4. Отправляем результат через WebSocket
+    broadcast({
+      type: 'PORTFOLIO_BACKTEST_COMPLETED',
+      payload: {
+        jobId,
+        portfolioParams,
+        result: portfolioBacktestResult
+      }
+    });
+    logger.info(`[Job ${jobId}] Broadcasted PORTFOLIO_BACKTEST_COMPLETED event.`);
+
+    logger.info(`Finished job ${JOB_TYPES.FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST} (ID: ${jobId}) successfully.`);
+
+  } catch (error: any) {
+    logger.error(`Error processing job ${JOB_TYPES.FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST} (ID: ${jobId}):`, error);
+    
+    // Отправляем уведомление об ошибке через WebSocket
+    broadcast({
+      type: 'PORTFOLIO_BACKTEST_FAILED',
+      payload: {
+        jobId,
+        portfolioParams,
+        error: { 
+          message: error.message,
+        }
+      }
+    });
+    logger.info(`[Job ${jobId}] Broadcasted PORTFOLIO_BACKTEST_FAILED event.`);
+    throw error; // Перебрасываем ошибку, чтобы задача была помечена как failed
+  }
+};
+
 // Главный процессор задач для очереди данных
 const dataProcessor = async (job: Job<DataJobData>) => {
   logger.debug(`[Worker] Picked up job ${job.name} (ID: ${job.id}).`); // Лог получения задачи воркером
@@ -208,6 +320,9 @@ const dataProcessor = async (job: Job<DataJobData>) => {
       break;
     case JOB_TYPES.FETCH_CANDLES_AND_RUN_BACKTEST:
       await processFetchCandlesAndRunBacktest(job as Job<FetchCandlesAndRunBacktestJobData>);
+      break;
+    case JOB_TYPES.FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST:
+      await processFetchPortfolioDataAndRunBacktest(job as Job<FetchPortfolioDataAndRunBacktestJobData>);
       break;
     default:
       logger.warn(`Unknown job type: ${job.name}`);
@@ -338,4 +453,4 @@ logger.info('Data Worker instance created and listeners attached.');
 export { worker as dataWorker };
 
 // Экспортируем типы задач для использования в контроллере
-export type { FetchCandlesJobData, FetchPairsJobData }; 
+export type { FetchCandlesJobData, FetchPairsJobData, FetchPortfolioDataAndRunBacktestJobData }; 
