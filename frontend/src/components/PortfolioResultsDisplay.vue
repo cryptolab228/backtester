@@ -163,7 +163,7 @@ import DataTable from 'primevue/datatable';
 import Column from 'primevue/column';
 import Badge from 'primevue/badge';
 import ProgressBar from 'primevue/progressbar';
-import type { PortfolioBacktestResult, Trade } from '@/types/strategy';
+import type { PortfolioBacktestResult } from '@/types/strategy';
 
 interface Props {
   portfolioResults: PortfolioBacktestResult | null;

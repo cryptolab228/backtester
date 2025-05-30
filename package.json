@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "axios": "^1.9.0",
     "lodash": "^4.17.21",
     "technicalindicators": "^3.1.0",
     "uuid": "^11.1.0"

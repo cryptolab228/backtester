@@ -194,7 +194,7 @@
             
             <TabView class="mt-2">
               <!-- Результаты обычного бектеста -->
-              <TabPanel v-if="!backtestStore.isPortfolioMode" header="Сводка">
+              <TabPanel v-if="!backtestStore.isPortfolioMode" header="Сводка" value="summary">
                 <div v-if="backtestResultsStore?.metrics" class="space-y-6">
                   <!-- Основные метрики в карточках -->
                   <div class="bg-white rounded-lg shadow p-6">
@@ -207,7 +207,7 @@
                         <div class="text-sm text-green-600 font-medium">Total PnL</div>
                         <div class="text-2xl font-bold" :class="(backtestResultsStore.metrics.totalPnl || 0) >= 0 ? 'text-green-700' : 'text-red-700'">
                           ${{ formatMetric('totalPnl', backtestResultsStore.metrics.totalPnl) }}
-                        </div>
+                </div>
                       </div>
                       <div class="bg-gradient-to-r from-blue-50 to-blue-100 p-4 rounded-lg">
                         <div class="text-sm text-blue-600 font-medium">Всего сделок</div>
@@ -288,12 +288,12 @@
               </TabPanel>
               
               <!-- Результаты портфельного бектеста -->
-              <TabPanel v-if="backtestStore.isPortfolioMode" header="Результаты Портфеля">
+              <TabPanel v-if="backtestStore.isPortfolioMode" header="Результаты Портфеля" value="portfolio-results">
                 <PortfolioResultsDisplay :portfolioResults="portfolioResultsStore" />
               </TabPanel>
 
               <!-- Список сделок для обычного бектеста -->
-              <TabPanel v-if="!backtestStore.isPortfolioMode" header="Список сделок">
+              <TabPanel v-if="!backtestStore.isPortfolioMode" header="Список сделок" value="trades-single">
                 <div v-if="backtestResultsStore?.trades && backtestResultsStore.trades.length > 0" class="bg-white rounded-lg shadow p-6">
                   <h3 class="text-xl font-semibold text-gray-900 mb-4 flex items-center">
                     <i class="pi pi-history mr-2 text-purple-600"></i>
@@ -312,7 +312,8 @@
                     :sortOrder="-1"
                     :emptyMessage="'Нет сделок для отображения'"
                     :scrollable="false"
-                    class="compact-table"
+                    class="compact-table clickable-trades"
+                    @rowClick="onTradeClick"
                   >
                     <Column field="id" header="ID" :sortable="true" style="width: 70px; max-width: 70px;">
                       <template #body="slotProps">
@@ -337,9 +338,9 @@
                       </template>
                     </Column>
                     <Column field="entryPrice" header="Цена входа" :sortable="true" style="width: 85px; max-width: 85px;">
-                      <template #body="slotProps">
+                        <template #body="slotProps">
                         <span class="text-sm">{{ slotProps.data.entryPrice?.toFixed(4) }}</span>
-                      </template>
+                        </template>
                     </Column>
                     <Column field="exitPrice" header="Цена выхода" :sortable="true" style="width: 85px; max-width: 85px;">
                       <template #body="slotProps">
@@ -359,7 +360,7 @@
                       </template>
                     </Column>
                     <Column field="exitReason" header="Причина выхода" :sortable="true" style="width: 85px; max-width: 85px;">
-                      <template #body="slotProps">
+                        <template #body="slotProps">
                         <span class="text-xs">{{ slotProps.data.exitReason || '-' }}</span>
                       </template>
                     </Column>
@@ -373,7 +374,7 @@
               </TabPanel>
               
               <!-- Список сделок для портфельного бектеста -->
-              <TabPanel v-if="backtestStore.isPortfolioMode" header="Список сделок">
+              <TabPanel v-if="backtestStore.isPortfolioMode" header="Список сделок" value="trades-portfolio">
                 <div v-if="portfolioResultsStore && getAllPortfolioTrades().length > 0" class="bg-white rounded-lg shadow p-6">
                   <h3 class="text-xl font-semibold text-gray-900 mb-4 flex items-center">
                     <i class="pi pi-history mr-2 text-purple-600"></i>
@@ -392,7 +393,8 @@
                     :sortOrder="-1"
                     :emptyMessage="'Нет сделок для отображения'"
                     :scrollable="false"
-                    class="compact-table"
+                    class="compact-table clickable-trades"
+                    @rowClick="onTradeClick"
                   >
                     <Column field="pair" header="Пара" :sortable="true" style="width: 90px; max-width: 90px;">
                       <template #body="slotProps">
@@ -403,16 +405,16 @@
                       <template #body="slotProps">
                         <span :class="slotProps.data.direction === 'long' ? 'text-green-600 font-semibold' : 'text-red-600 font-semibold'" class="text-xs">
                           {{ slotProps.data.direction === 'long' ? 'LONG' : 'SHORT' }}
-                        </span>
-                      </template>
+                            </span>
+                        </template>
                     </Column>
                     <Column field="entryTimestamp" header="Время входа" :sortable="true" style="width: 120px; max-width: 120px;">
-                      <template #body="slotProps">
+                        <template #body="slotProps">
                         <span class="text-xs">{{ formatDate(slotProps.data.entryTimestamp) }}</span>
-                      </template>
+                        </template>
                     </Column>
                     <Column field="entryPrice" header="Цена входа" :sortable="true" style="width: 85px; max-width: 85px;">
-                      <template #body="slotProps">
+                        <template #body="slotProps">
                         <span class="text-sm">{{ slotProps.data.entryPrice?.toFixed(4) }}</span>
                       </template>
                     </Column>
@@ -436,7 +438,7 @@
                     <Column field="exitReason" header="Причина выхода" :sortable="true" style="width: 85px; max-width: 85px;">
                       <template #body="slotProps">
                         <span class="text-xs">{{ slotProps.data.exitReason || '-' }}</span>
-                      </template>
+                        </template>
                     </Column>
                   </DataTable>
                 </div>
@@ -447,21 +449,74 @@
                 </div>
               </TabPanel>
               
-              <TabPanel header="Графики">
-                <p class="m-0 p-4 text-gray-600 bg-gray-50 rounded-md">
-                  Здесь будут отображаться графики производительности, кривая капитала и другие визуализации.
-                </p>
+              <TabPanel header="Графики" value="charts">
+                <div class="space-y-6">
+                  <!-- График кривой баланса для одиночного бектеста -->
+                  <div v-if="!backtestStore.isPortfolioMode">
+                    <EquityCurveChart 
+                      :equityData="backtestResultsStore?.metrics?.equityCurve || null"
+                      title="Кривая баланса (Одиночный бектест)"
+                      :isLoading="backtestIsLoading"
+                      noDataMessage="Запустите одиночный бектест для просмотра кривой баланса"
+                      color="rgb(59, 130, 246)"
+                      fillColor="rgba(59, 130, 246, 0.1)"
+                    />
+                  </div>
+
+                  <!-- График кривой баланса для портфельного бектеста -->
+                  <div v-else>
+                    <!-- Общая кривая портфеля -->
+                    <EquityCurveChart 
+                      :equityData="portfolioResultsStore?.overallMetrics?.portfolioEquityCurve || null"
+                      title="Общая кривая баланса портфеля"
+                      :isLoading="backtestIsLoading"
+                      noDataMessage="Запустите портфельный бектест для просмотра общей кривой баланса"
+                      color="rgb(16, 185, 129)"
+                      fillColor="rgba(16, 185, 129, 0.1)"
+                    />
+
+                    <!-- Кривые по отдельным парам -->
+                    <div v-if="portfolioResultsStore?.metricsByPair" class="mt-6">
+                      <h3 class="text-xl font-semibold text-gray-900 mb-4">Кривые баланса по парам</h3>
+                      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div v-for="(metrics, pair) in portfolioResultsStore.metricsByPair" :key="pair">
+                          <EquityCurveChart 
+                            :equityData="metrics.equityCurve || null"
+                            :title="`Кривая баланса: ${pair}`"
+                            :isLoading="false"
+                            :noDataMessage="`Нет данных кривой для ${pair}`"
+                            color="rgb(168, 85, 247)"
+                            fillColor="rgba(168, 85, 247, 0.1)"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </TabPanel>
-              <TabPanel header="Логи">
-                <p class="m-0 p-4 text-gray-600 bg-gray-50 rounded-md">
-                  Здесь будут выводиться логи процесса бектестинга для детального анализа.
-                </p>
+
+              <TabPanel header="Логи" value="logs">
+                <div class="flex flex-col items-center justify-center h-full">
+                  <div class="text-center">
+                    <i class="pi pi-list text-6xl text-gray-300 mb-4"></i>
+                    <h3 class="text-xl text-gray-500 mb-2">Логи процесса бектестинга</h3>
+                    <p class="text-gray-400">Здесь будут выводиться логи процесса бектестинга для детального анализа.</p>
+                  </div>
+                </div>
               </TabPanel>
             </TabView>
           </div>
         </Panel>
       </div>
     </div>
+
+    <!-- Модальное окно графика сделки -->
+    <TradeChartModal
+      v-model:visible="showTradeChart"
+      :trade="selectedTrade"
+      :candleData="tradeCandleData"
+      @close="onTradeChartClose"
+    />
   </div>
 </template>
 
@@ -494,6 +549,8 @@ import InputSwitch from 'primevue/inputswitch';
 import PortfolioSettingsForm from '@/components/PortfolioSettingsForm.vue';
 import PortfolioResultsDisplay from '@/components/PortfolioResultsDisplay.vue';
 import Badge from 'primevue/badge';
+import TradeChartModal from '@/components/TradeChartModal.vue';
+import EquityCurveChart from '@/components/EquityCurveChart.vue';
 
 const settingsStore = useSettingsStore();
 const backtestStore = useBacktestStore();
@@ -563,6 +620,11 @@ const portfolioTimeframe = ref<string>('1h');
 const portfolioStartDate = ref<Date | null>(null);
 const portfolioEndDate = ref<Date | null>(null);
 
+// Состояние для модального окна графика сделки
+const selectedTrade = ref<any | null>(null);
+const showTradeChart = ref(false);
+const tradeCandleData = ref<any[] | null>(null);
+
 const handleWebSocketMessage = (event: MessageEvent) => {
   try {
     const message = JSON.parse(event.data as string);
@@ -585,24 +647,24 @@ const handleWebSocketMessage = (event: MessageEvent) => {
       
       // Проверяем, что компонент еще активен перед обновлением состояния
       if (backtestStore && websocket && isComponentMounted.value) {
-        backtestStore.results = result as BacktestResult;
-        backtestStore.error = null;
-        backtestStore.isLoading = false;
+      backtestStore.results = result as BacktestResult;
+      backtestStore.error = null;
+      backtestStore.isLoading = false;
         
-        if (pendingJobId.value === completedJobId) {
-           pendingJobId.value = null;
-           backtestStore.clearCurrentAbortController();
-           clearActiveJobState();
-        }
+      if (pendingJobId.value === completedJobId) {
+         pendingJobId.value = null;
+         backtestStore.clearCurrentAbortController();
+         clearActiveJobState();
+      }
 
-        localStorage.setItem(BACKTESTER_RESULTS_KEY, JSON.stringify(result));
+      localStorage.setItem(BACKTESTER_RESULTS_KEY, JSON.stringify(result));
 
         safeToast({ 
-          severity: 'success', 
-          summary: 'Бектест Завершен', 
-          detail: `Бектест для ${msgSymbol} (${msgTimeframe}) успешно завершен.`, 
-          life: 5000 
-        });
+        severity: 'success', 
+        summary: 'Бектест Завершен', 
+        detail: `Бектест для ${msgSymbol} (${msgTimeframe}) успешно завершен.`, 
+        life: 5000 
+      });
       }
     } 
     // Обработка портфельного бектеста
@@ -617,24 +679,24 @@ const handleWebSocketMessage = (event: MessageEvent) => {
       
       // Проверяем, что компонент еще активен перед обновлением состояния
       if (backtestStore && websocket && isComponentMounted.value) {
-        backtestStore.portfolioResults = result as PortfolioBacktestResult;
-        backtestStore.error = null;
-        backtestStore.isLoading = false;
+      backtestStore.portfolioResults = result as PortfolioBacktestResult;
+      backtestStore.error = null;
+      backtestStore.isLoading = false;
         
-        if (pendingJobId.value === completedJobId) {
-           pendingJobId.value = null;
-           backtestStore.clearCurrentAbortController();
-           clearActiveJobState();
-        }
+      if (pendingJobId.value === completedJobId) {
+         pendingJobId.value = null;
+         backtestStore.clearCurrentAbortController();
+         clearActiveJobState();
+      }
 
-        localStorage.setItem(PORTFOLIO_RESULTS_KEY, JSON.stringify(result));
+      localStorage.setItem(PORTFOLIO_RESULTS_KEY, JSON.stringify(result));
 
         safeToast({ 
-          severity: 'success', 
-          summary: 'Портфельный Бектест Завершен', 
+        severity: 'success', 
+        summary: 'Портфельный Бектест Завершен', 
           detail: `Портфельный бектест успешно завершен. Всего сделок: ${result.overallMetrics?.totalPortfolioTrades || 0}`, 
-          life: 5000 
-        });
+        life: 5000 
+      });
       }
     }
     // Обработка ошибок обычного бектеста
@@ -755,7 +817,7 @@ const closeWebSocket = () => {
     websocket.removeEventListener('close', () => {});
     
     if (websocket.readyState === WebSocket.OPEN || websocket.readyState === WebSocket.CONNECTING) {
-      websocket.close();
+    websocket.close();
     }
     websocket = null;
   }
@@ -843,9 +905,9 @@ onMounted(async () => {
   connectWebSocket();
   
   // Восстановление состояния активного сканирования (после подключения WebSocket)
-  setTimeout(() => {
+  setTimeout(async () => {
     if (isComponentMounted.value) {
-      restoreActiveJobState();
+      await restoreActiveJobState();
     }
   }, 1000); // Небольшая задержка для установки WebSocket соединения
 });
@@ -1275,7 +1337,7 @@ const saveActiveJobState = (jobId: string | null, jobType: 'single' | 'portfolio
   }
 };
 
-const restoreActiveJobState = () => {
+const restoreActiveJobState = async () => {
   const savedJobStateRaw = localStorage.getItem(ACTIVE_JOB_KEY);
   if (savedJobStateRaw) {
     try {
@@ -1290,18 +1352,61 @@ const restoreActiveJobState = () => {
         return;
       }
       
-      pendingJobId.value = jobId;
-      backtestStore.isLoading = true;
-      
-      // Показываем уведомление о восстановлении состояния
-      safeToast({
-        severity: 'info',
-        summary: 'Восстановление состояния',
-        detail: `Обнаружено активное сканирование (${jobType === 'portfolio' ? 'портфельный' : 'обычный'} бектест). ID: ${jobId}`,
-        life: 5000
-      });
-      
-      logger.info(`[BacktesterView] Restored active job state: ${jobId} (${jobType})`);
+      // Проверяем реальный статус задачи на сервере
+      try {
+        const { getJobDetails } = await import('@/services/apiService');
+        const jobDetails = await getJobDetails(jobId);
+        
+        // Проверяем, что задача все еще активна или ожидает выполнения
+        if (jobDetails.status === 'active' || jobDetails.status === 'waiting' || jobDetails.status === 'wait') {
+          pendingJobId.value = jobId;
+          backtestStore.isLoading = true;
+          
+          // Показываем уведомление о восстановлении состояния
+          safeToast({
+            severity: 'info',
+            summary: 'Восстановление состояния',
+            detail: `Обнаружено активное сканирование (${jobType === 'portfolio' ? 'портфельный' : 'обычный'} бектест). Статус: ${jobDetails.status}. ID: ${jobId}`,
+            life: 5000
+          });
+          
+          logger.info(`[BacktesterView] Restored active job state: ${jobId} (${jobType}) with status: ${jobDetails.status}`);
+        } else if (jobDetails.status === 'completed') {
+          // Задача завершена, но результаты не были получены
+          logger.info(`[BacktesterView] Job ${jobId} completed but results not received, clearing state`);
+          safeToast({
+            severity: 'warning',
+            summary: 'Задача завершена',
+            detail: `${jobType === 'portfolio' ? 'Портфельный' : 'Обычный'} бектест завершился во время отключения. Проверьте результаты.`,
+            life: 7000
+          });
+          localStorage.removeItem(ACTIVE_JOB_KEY);
+        } else if (jobDetails.status === 'failed') {
+          // Задача провалилась
+          logger.info(`[BacktesterView] Job ${jobId} failed, clearing state`);
+          safeToast({
+            severity: 'error',
+            summary: 'Задача провалилась',
+            detail: `${jobType === 'portfolio' ? 'Портфельный' : 'Обычный'} бектест завершился с ошибкой во время отключения.`,
+            life: 7000
+          });
+          localStorage.removeItem(ACTIVE_JOB_KEY);
+        } else {
+          // Неизвестный статус
+          logger.info(`[BacktesterView] Job ${jobId} has unexpected status: ${jobDetails.status}, clearing state`);
+          localStorage.removeItem(ACTIVE_JOB_KEY);
+        }
+      } catch (jobCheckError) {
+        // Если не можем получить статус задачи (возможно, она была удалена)
+        logger.warn(`[BacktesterView] Could not check job ${jobId} status:`, jobCheckError);
+        safeToast({
+          severity: 'warning',
+          summary: 'Задача не найдена',
+          detail: `Не удалось проверить статус ${jobType === 'portfolio' ? 'портфельного' : 'обычного'} бектеста. Возможно, задача была удалена.`,
+          life: 5000
+        });
+        localStorage.removeItem(ACTIVE_JOB_KEY);
+      }
     } catch (e) {
       logger.error('[BacktesterView] Failed to parse active job state:', e);
       localStorage.removeItem(ACTIVE_JOB_KEY);
@@ -1383,6 +1488,62 @@ const formatDate = (timestamp: number) => {
     hour: '2-digit',
     minute: '2-digit'
   });
+};
+
+// Функция для обработки клика на сделку
+const onTradeClick = async (event: any) => {
+  console.log('Trade clicked:', event.data);
+  selectedTrade.value = event.data;
+  
+  // Генерируем тестовые данные свечей для демонстрации графика
+  // В будущем здесь будет запрос к бэкенду за реальными данными
+  const trade = event.data;
+  const startTime = trade.entryTimestamp || Date.now() - 24 * 60 * 60 * 1000;
+  const endTime = trade.exitTimestamp || Date.now();
+  const entryPrice = trade.entryPrice || 100;
+  
+  // Создаем массив тестовых свечей вокруг времени сделки
+  const testCandles: Array<{
+    timestamp: number;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume: number;
+  }> = [];
+  const timeStep = 5 * 60 * 1000; // 5 минут между свечами
+  const numCandles = Math.max(20, Math.floor((endTime - startTime) / timeStep));
+  
+  for (let i = 0; i < numCandles; i++) {
+    const timestamp = startTime + (i * timeStep);
+    const basePrice = entryPrice + (Math.random() - 0.5) * entryPrice * 0.02; // ±2% от цены входа
+    const high: number = basePrice + Math.random() * entryPrice * 0.005; // +0.5%
+    const low: number = basePrice - Math.random() * entryPrice * 0.005; // -0.5%
+    const open: number = i === 0 ? entryPrice : testCandles[i-1].close;
+    const close: number = basePrice;
+    
+    testCandles.push({
+      timestamp,
+      open,
+      high,
+      low,
+      close,
+      volume: Math.floor(Math.random() * 1000000)
+    });
+  }
+  
+  tradeCandleData.value = testCandles;
+  showTradeChart.value = true;
+  
+  // TODO: Заменить на реальный запрос к бэкенду
+  // const candleResponse = await fetch(`/api/candles/${trade.pair}?from=${trade.entryTimestamp}&to=${trade.exitTimestamp || Date.now()}`);
+  // tradeCandleData.value = await candleResponse.json();
+};
+
+const onTradeChartClose = () => {
+  showTradeChart.value = false;
+  selectedTrade.value = null;
+  tradeCandleData.value = null;
 };
 
 </script>
@@ -1511,5 +1672,33 @@ const formatDate = (timestamp: number) => {
 
 :deep(.compact-table .p-datatable-scrollable-body) {
   overflow: visible;
+}
+
+/* Стили для кликабельных строк таблиц */
+:deep(.clickable-trades .p-datatable-tbody > tr) {
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+:deep(.clickable-trades .p-datatable-tbody > tr:hover) {
+  background-color: rgba(59, 130, 246, 0.05) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+:deep(.clickable-trades .p-datatable-tbody > tr:active) {
+  background-color: rgba(59, 130, 246, 0.1) !important;
+}
+
+/* Индикатор интерактивности */
+:deep(.clickable-trades .p-datatable-tbody > tr td:first-child::before) {
+  content: '👁️';
+  opacity: 0;
+  margin-right: 8px;
+  transition: opacity 0.2s ease;
+}
+
+:deep(.clickable-trades .p-datatable-tbody > tr:hover td:first-child::before) {
+  opacity: 0.6;
 }
 </style> 

@@ -130,6 +130,45 @@ export async function getFuturesPairs(): Promise<TradingPairInfo[]> {
 }
 
 /**
+ * Проверяет доступность торговой пары на OKX.
+ * @param symbol - ID инструмента (например, BTC-USDT-SWAP)
+ * @returns true если пара доступна, false если нет
+ */
+export async function validateTradingPair(symbol: string): Promise<boolean> {
+  try {
+    const url = `${BASE_URL}/api/v5/public/instruments`;
+    
+    // Определяем тип инструмента по символу
+    let instType = '';
+    if (symbol.includes('-SWAP')) {
+      instType = 'SWAP';
+    } else if (symbol.match(/-\d{6}$/)) { // Паттерн для фьючерсов с датой
+      instType = 'FUTURES';
+    } else {
+      logger.warn(`Cannot determine instrument type for ${symbol}`);
+      return false;
+    }
+    
+    const params = { instType };
+    const response = await axios.get<OkxInstrumentsResponse>(url, { params });
+    
+    if (response.data && response.data.code === '0') {
+      const exists = response.data.data.some(inst => inst.instId === symbol);
+      if (!exists) {
+        logger.warn(`Trading pair ${symbol} not found in OKX ${instType} instruments`);
+      }
+      return exists;
+    } else {
+      logger.error(`Error validating trading pair ${symbol}: ${response.data?.msg || 'Unknown error'}`);
+      return false;
+    }
+  } catch (error: any) {
+    logger.error(`Exception validating trading pair ${symbol}:`, error.message || error);
+    return false;
+  }
+}
+
+/**
  * Получает исторические свечи для указанного символа и таймфрейма.
  * Автоматически обрабатывает пагинацию и Rate Limits OKX (100 свечей за раз, лимит запросов).
  * @param symbol - ID инструмента (например, BTC-USDT-SWAP)
@@ -152,13 +191,20 @@ export async function getHistoricalCandles(
     return [];
   }
 
+  // Валидация существования торговой пары перед запросом данных
+  const isValidPair = await validateTradingPair(symbol);
+  if (!isValidPair) {
+    logger.error(`Trading pair ${symbol} is not available on OKX. Skipping data fetch.`);
+    return [];
+  }
+
   const allCandles: CandleData[] = [];
   // currentAfterForAPI будет временем открытия самой СТАРОЙ свечи из предыдущей пачки,
   // или endTime + 1 для самого первого запроса, чтобы включить свечу с timestamp === endTime.
   // OKX 'after=ts' -> отдает свечи СТАРШЕ ts (т.е. timestamp < ts)
   let currentAfterForAPI = endTime ? endTime + 1 : undefined; 
   const maxLimitPerRequest = 100;
-  const requestDelay = 250; 
+  const requestDelay = 250;
 
   logger.info(`Fetching candles for ${symbol} (${timeframe}) for period ${startTime ? new Date(startTime).toISOString() : 'earliest'} to ${endTime ? new Date(endTime).toISOString() : 'latest available'}`);
 
