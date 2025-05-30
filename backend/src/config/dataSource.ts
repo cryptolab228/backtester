@@ -3,6 +3,7 @@ import { DataSource, DataSourceOptions } from 'typeorm';
 import config from './index';
 import { TradingPair } from '@/models/TradingPair';
 import { Candle } from '@/models/Candle';
+import { Setting } from '@/models/Setting';
 import logger from '@/utils/logger';
 
 const dataSourceOptions: DataSourceOptions = {
@@ -14,7 +15,7 @@ const dataSourceOptions: DataSourceOptions = {
   database: config.db.database,
   synchronize: config.env === 'development', // В production лучше использовать миграции!
   logging: config.env === 'development' ? ['query', 'error'] : ['error'], // Логирование запросов в dev
-  entities: [TradingPair, Candle],
+  entities: [TradingPair, Candle, Setting],
   migrations: [], // Путь к миграциям, если будут использоваться
   subscribers: [],
 };

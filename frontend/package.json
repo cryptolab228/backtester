@@ -9,26 +9,33 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@primevue/themes": "^4.3.3",
+    "@primevue/themes": "^4.3.4",
     "apexcharts": "^4.7.0",
     "axios": "^1.9.0",
+    "chart.js": "^4.4.9",
+    "chartjs-adapter-date-fns": "^3.0.0",
+    "date-fns": "^4.1.0",
+    "lightweight-charts": "^5.0.7",
     "lucide-vue-next": "^0.509.0",
     "pinia": "^3.0.2",
     "primeicons": "^7.0.0",
-    "primevue": "^3.53.1",
+    "primevue": "^4.3.4",
+    "uuid": "^11.1.0",
     "vue": "^3.5.13",
+    "vue-chartjs": "^5.3.2",
     "vue-router": "^4.5.1",
     "vue3-apexcharts": "^1.8.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",
-    "@vitejs/plugin-vue": "^5.2.2",
+    "@types/uuid": "^10.0.0",
+    "@vitejs/plugin-vue": "^5.2.4",
     "@vue/tsconfig": "^0.7.0",
     "autoprefixer": "^10.4.21",
     "postcss": "^8.5.3",
     "tailwindcss": "^3.4.4",
     "typescript": "~5.7.2",
-    "vite": "^6.3.1",
+    "vite": "^6.3.5",
     "vue-tsc": "^2.2.8"
   }
 }

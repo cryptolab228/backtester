@@ -1,20 +1,41 @@
-import axios from 'axios';
+import axios, { type AxiosResponse } from 'axios';
 // import type { JobCounts, Job, JobStatus, GetJobsParams } from './apiServiceTypes'; // Удаляем, так как типы определены ниже
 
 // Базовый URL бэкенда (можно вынести в .env)
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
 
-const apiClient = axios.create({
+export const apiClient = axios.create({
   baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
+// Тип для промиса с возможностью отмены
+export interface AbortablePromise<T> {
+  promise: Promise<T>;
+  abort: () => void;
+}
+
+// Обертка для POST запросов с возможностью отмены
+export function postWithAbort<T>(url: string, data?: any, signal?: AbortSignal): AbortablePromise<AxiosResponse<T>> {
+  const controller = new AbortController();
+  const abortSignal = signal || controller.signal;
+
+  const promise = apiClient.post<T>(url, data, { signal: abortSignal });
+
+  return {
+    promise: promise, // Возвращаем полный промис AxiosResponse
+    abort: () => controller.abort(),
+  };
+}
+
 // Если типы еще не вынесены, оставляем их здесь или определяем новые
 export interface TradingPair {
   id: string; // или number, в зависимости от вашей модели
   symbol: string;
+  exchange?: string; // Добавлено свойство для биржи
+  isSpot?: boolean;  // Добавлено свойство для определения спотовый/фьючерсный
   // другие поля, если есть, например, baseAsset, quoteAsset, etc.
 }
 
@@ -136,7 +157,7 @@ export interface Job {
   finishedOn: number | null;
   processedOn: number | null;
   opts: JobOpts; // Используем новый, более точный тип JobOpts
-  status?: string; // Нестандартное поле, которое мы можем добавить на клиенте для удобства
+  status: JobStatus; // Изменено: поле status теперь обязательное и соответствует типу JobStatus
   // Добавьте другие поля, которые возвращает toJSON() задачи BullMQ, если они нужны
 }
 
@@ -169,4 +190,53 @@ export const removeJob = async (jobId: string): Promise<{ message: string }> => 
 export const retryJob = async (jobId: string): Promise<{ message: string }> => {
   const response = await apiClient.post(`/data/queue/jobs/${jobId}/retry`);
   return response.data;
+};
+
+export const pauseJob = async (jobId: string): Promise<{ message: string }> => {
+  console.debug(`[ApiService] Pausing job: ${jobId}`);
+  try {
+    const response = await apiClient.post<{ message: string }>(`/data/queue/jobs/${jobId}/pause`);
+    console.info(`[ApiService] Job ${jobId} pause request successful:`, response.data.message);
+    return response.data;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error during job pause';
+    console.error(`[ApiService] Error pausing job ${jobId}:`, errorMessage, error);
+    // Re-throw a more specific error or handle it as needed
+    throw new Error(`Failed to pause job ${jobId}: ${errorMessage}`);
+  }
+};
+
+export const resumeJob = async (jobId: string): Promise<{ message: string }> => {
+  console.debug(`[ApiService] Resuming job: ${jobId}`);
+  try {
+    const response = await apiClient.post<{ message: string }>(`/data/queue/jobs/${jobId}/resume`);
+    console.info(`[ApiService] Job ${jobId} resume request successful:`, response.data.message);
+    return response.data;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error during job resume';
+    console.error(`[ApiService] Error resuming job ${jobId}:`, errorMessage, error);
+    throw new Error(`Failed to resume job ${jobId}: ${errorMessage}`);
+  }
+};
+
+export const getJobCounts = async (): Promise<JobCounts> => {
+  const response = await apiClient.get('/data/queue/job-counts');
+  return response.data;
+};
+
+// Новый метод для получения торговых пар
+export const getTradingPairs = async (): Promise<Array<{ id: number; symbol: string }>> => {
+  try {
+    const response = await apiClient.get<Array<{ id: number; symbol: string }>>('/data/trading-pairs');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching trading pairs:', error);
+    // В случае ошибки можно вернуть пустой массив или пробросить ошибку дальше
+    return [];
+  }
+};
+
+export default {
+  getQueueJobCounts,
+  getTradingPairs,
 }; 

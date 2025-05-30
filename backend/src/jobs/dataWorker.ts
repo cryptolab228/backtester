@@ -1,11 +1,17 @@
-import { Job } from 'bullmq';
+import { Job, JobProgress } from 'bullmq';
 import logger from '@/utils/logger';
-import { createWorker, DATA_QUEUE_NAME, dataQueue } from '@/config/queue';
+import { createWorker, DATA_QUEUE_NAME, dataQueue, broadcastJobCounts } from '@/config/queue';
 import * as okxService from '@/services/okxService';
 import { dataService } from '@/services/dataService';
+import { broadcast } from '@/websocket';
+import { runBacktest, runPortfolioBacktest } from '@/modules/backtester/backtester';
+import type { BacktestRunParameters, PortfolioBacktestRunParameters } from '@/modules/backtester/backtester.types';
+import type { CandleData } from '@/interfaces/marketData.interface';
 
 // Интерфейсы для данных задач
-interface FetchPairsJobData {}
+interface FetchPairsJobData {
+  isUserPaused?: boolean;
+}
 
 interface FetchCandlesJobData {
   symbol: string;
@@ -13,14 +19,34 @@ interface FetchCandlesJobData {
   startTime?: number;
   endTime?: number;
   limit?: number;
+  isUserPaused?: boolean;
 }
 
-type DataJobData = FetchPairsJobData | FetchCandlesJobData;
+interface FetchCandlesAndRunBacktestJobData {
+  symbol: string;
+  timeframe: string;
+  startTime: number;
+  endTime: number;
+  backtestParams: BacktestRunParameters;
+  isUserPaused?: boolean;
+}
+
+interface FetchPortfolioDataAndRunBacktestJobData {
+  portfolioParams: PortfolioBacktestRunParameters;
+  pairsNeedingData: string[];
+  startTimestamp: number;
+  endTimestamp: number;
+  isUserPaused?: boolean;
+}
+
+type DataJobData = FetchPairsJobData | FetchCandlesJobData | FetchCandlesAndRunBacktestJobData | FetchPortfolioDataAndRunBacktestJobData;
 
 // Константы для имен задач
 export const JOB_TYPES = {
   FETCH_PAIRS: 'fetch-pairs',
   FETCH_CANDLES: 'fetch-candles',
+  FETCH_CANDLES_AND_RUN_BACKTEST: 'fetch-candles-and-run-backtest',
+  FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST: 'FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST',
 } as const;
 
 /**
@@ -73,15 +99,230 @@ const processFetchCandles = async (job: Job<FetchCandlesJobData>) => {
   }
 };
 
+// Обработчик для новой задачи FETCH_CANDLES_AND_RUN_BACKTEST
+const processFetchCandlesAndRunBacktest = async (job: Job<FetchCandlesAndRunBacktestJobData>) => {
+  const { symbol, timeframe, startTime, endTime, backtestParams } = job.data;
+  const jobId = job.id;
+  logger.info(`[Worker] Received job ${JOB_TYPES.FETCH_CANDLES_AND_RUN_BACKTEST} (ID: ${jobId}) for ${symbol} (${timeframe}).`);
+  logger.debug(`[Job ${jobId}] Backtest params:`, backtestParams);
+
+  try {
+    // 1. Загрузка свечей
+    logger.info(`[Job ${jobId}] Calling okxService.getHistoricalCandles for ${symbol} (${timeframe}) from ${new Date(startTime)} to ${new Date(endTime)}.`);
+    const candlesFromAPI = await okxService.getHistoricalCandles(symbol, timeframe, startTime, endTime);
+    logger.info(`[Job ${jobId}] Fetched ${candlesFromAPI.length} candles from API for ${symbol}.`);
+
+    // 2. Сохранение свечей
+    if (candlesFromAPI.length > 0) {
+      logger.info(`[Job ${jobId}] Calling dataService.saveCandles for ${symbol}.`);
+      await dataService.saveCandles(symbol, timeframe, candlesFromAPI);
+      logger.info(`[Job ${jobId}] Finished dataService.saveCandles for ${symbol}.`);
+    } else {
+      logger.warn(`[Job ${jobId}] No candles fetched from API for ${symbol}. Backtest might not have enough data.`);
+      // Можно решить, прерывать ли здесь, если свечей 0. Пока продолжим.
+    }
+
+    // 3. Получение свечей из БД для бэктеста (чтобы убедиться в их наличии и формате)
+    logger.info(`[Job ${jobId}] Fetching candles from DB for backtest: ${symbol} (${timeframe}) from ${new Date(startTime)} to ${new Date(endTime)}`);
+    const candlesFromDB = await dataService.getCandles(symbol, timeframe, startTime, endTime);
+    logger.info(`[Job ${jobId}] Fetched ${candlesFromDB.length} candles from DB for backtest.`);
+
+    if (!candlesFromDB || candlesFromDB.length === 0) {
+      logger.error(`[Job ${jobId}] No candles found in DB for ${symbol} (${timeframe}) in range after fetch. Cannot run backtest.`);
+      throw new Error(`No candles in DB for ${symbol} after fetch attempt.`);
+    }
+
+    // 4. Адаптация данных для бэктеста
+    const candlesToBacktest: CandleData[] = candlesFromDB.map(c => ({
+      timestamp: Number(c.timestamp),
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+      volume: c.volume,
+      // volumeQuote можно будет добавить, если он есть в Candle модели и нужен для бэктеста
+    }));
+    logger.info(`[Job ${jobId}] Prepared ${candlesToBacktest.length} candles for backtest execution.`);
+
+    // 5. Запуск бэктеста
+    logger.info(`[Job ${jobId}] Starting backtest for ${symbol} with params:`, backtestParams);
+    const backtestResult = await runBacktest(backtestParams, candlesToBacktest);
+    logger.info(`[Job ${jobId}] Backtest finished for ${symbol}. Trades: ${backtestResult.metrics.totalTrades}.`);
+    logger.debug(`[Job ${jobId}] Backtest result for ${symbol}:`, backtestResult);
+
+    // Отправляем результат через WebSocket
+    broadcast({
+      type: 'BACKTEST_COMPLETED',
+      payload: {
+        jobId,
+        symbol,
+        timeframe,
+        backtestParams, // Исходные параметры, с которыми запускался
+        result: backtestResult
+      }
+    });
+    logger.info(`[Job ${jobId}] Broadcasted BACKTEST_COMPLETED event.`);
+
+    logger.info(`Finished job ${JOB_TYPES.FETCH_CANDLES_AND_RUN_BACKTEST} (ID: ${jobId}) successfully.`);
+
+  } catch (error: any) {
+    logger.error(`Error processing job ${JOB_TYPES.FETCH_CANDLES_AND_RUN_BACKTEST} (ID: ${jobId}) for ${symbol} (${timeframe}):`, error);
+    // Отправляем уведомление об ошибке через WebSocket
+    broadcast({
+      type: 'BACKTEST_FAILED',
+      payload: {
+        jobId,
+        symbol,
+        timeframe,
+        backtestParams,
+        error: { 
+          message: error.message,
+          // Можно добавить и другие детали ошибки, если это безопасно и полезно для фронтенда
+          // stack: error.stack // Не рекомендуется слать полный stacktrace на фронтенд
+        }
+      }
+    });
+    logger.info(`[Job ${jobId}] Broadcasted BACKTEST_FAILED event.`);
+    throw error; // Перебрасываем ошибку, чтобы задача была помечена как failed
+  }
+};
+
+// Обработчик для портфельного бектестинга FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST
+const processFetchPortfolioDataAndRunBacktest = async (job: Job<FetchPortfolioDataAndRunBacktestJobData>) => {
+  const { portfolioParams, pairsNeedingData, startTimestamp, endTimestamp } = job.data;
+  const jobId = job.id;
+  logger.info(`[Worker] Received job ${JOB_TYPES.FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST} (ID: ${jobId}) for portfolio backtest with ${pairsNeedingData.length} pairs needing data.`);
+  logger.debug(`[Job ${jobId}] Portfolio params:`, portfolioParams);
+  logger.debug(`[Job ${jobId}] Pairs needing data:`, pairsNeedingData);
+
+  try {
+    const candlesByPair: Record<string, CandleData[]> = {};
+
+    // 1. Загрузка данных для пар, которым нужны данные
+    for (const pairSymbol of pairsNeedingData) {
+      logger.info(`[Job ${jobId}] Fetching data for ${pairSymbol} (${portfolioParams.timeframe}) from ${new Date(startTimestamp)} to ${new Date(endTimestamp)}.`);
+      
+      // Загружаем свечи из API
+      const candlesFromAPI = await okxService.getHistoricalCandles(
+        pairSymbol, 
+        portfolioParams.timeframe, 
+        startTimestamp, 
+        endTimestamp
+      );
+      logger.info(`[Job ${jobId}] Fetched ${candlesFromAPI.length} candles from API for ${pairSymbol}.`);
+
+      // Сохраняем в БД
+      if (candlesFromAPI.length > 0) {
+        await dataService.saveCandles(pairSymbol, portfolioParams.timeframe, candlesFromAPI);
+        logger.info(`[Job ${jobId}] Saved ${candlesFromAPI.length} candles to DB for ${pairSymbol}.`);
+      } else {
+        logger.warn(`[Job ${jobId}] No candles fetched from API for ${pairSymbol}.`);
+      }
+    }
+
+    // 2. Загрузка всех необходимых данных из БД для портфельного бектеста
+    for (const pairSymbol of portfolioParams.pairSymbols) {
+      logger.info(`[Job ${jobId}] Loading candles from DB for ${pairSymbol} (${portfolioParams.timeframe}).`);
+      const candlesFromDB = await dataService.getCandles(
+        pairSymbol, 
+        portfolioParams.timeframe, 
+        startTimestamp, 
+        endTimestamp
+      );
+      
+      if (candlesFromDB && candlesFromDB.length > 0) {
+        // Адаптация данных для портфельного бектестера
+        candlesByPair[pairSymbol] = candlesFromDB.map(c => ({
+          timestamp: Number(c.timestamp),
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+          volume: c.volume,
+        }));
+        logger.info(`[Job ${jobId}] Prepared ${candlesByPair[pairSymbol].length} candles for ${pairSymbol}.`);
+      } else {
+        logger.warn(`[Job ${jobId}] No candles found in DB for ${pairSymbol} after fetch attempt.`);
+        // Устанавливаем пустой массив для пар без данных
+        candlesByPair[pairSymbol] = [];
+      }
+    }
+
+    // 3. Запуск портфельного бектеста
+    const totalCandlesLoaded = Object.values(candlesByPair).reduce((sum, candles) => sum + candles.length, 0);
+    logger.info(`[Job ${jobId}] Starting portfolio backtest with ${totalCandlesLoaded} total candles across ${Object.keys(candlesByPair).length} pairs.`);
+    logger.debug(`[Job ${jobId}] Candles by pair summary:`, Object.fromEntries(
+      Object.entries(candlesByPair).map(([pair, candles]) => [pair, candles.length])
+    ));
+
+    const portfolioBacktestResult = await runPortfolioBacktest(portfolioParams, candlesByPair);
+    logger.info(`[Job ${jobId}] Portfolio backtest finished. Total trades: ${portfolioBacktestResult.overallMetrics.totalPortfolioTrades}, Total PnL: ${portfolioBacktestResult.overallMetrics.totalPortfolioPnl}.`);
+
+    // 4. Отправляем результат через WebSocket
+    broadcast({
+      type: 'PORTFOLIO_BACKTEST_COMPLETED',
+      payload: {
+        jobId,
+        portfolioParams,
+        result: portfolioBacktestResult
+      }
+    });
+    logger.info(`[Job ${jobId}] Broadcasted PORTFOLIO_BACKTEST_COMPLETED event.`);
+
+    logger.info(`Finished job ${JOB_TYPES.FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST} (ID: ${jobId}) successfully.`);
+
+  } catch (error: any) {
+    logger.error(`Error processing job ${JOB_TYPES.FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST} (ID: ${jobId}):`, error);
+    
+    // Отправляем уведомление об ошибке через WebSocket
+    broadcast({
+      type: 'PORTFOLIO_BACKTEST_FAILED',
+      payload: {
+        jobId,
+        portfolioParams,
+        error: { 
+          message: error.message,
+        }
+      }
+    });
+    logger.info(`[Job ${jobId}] Broadcasted PORTFOLIO_BACKTEST_FAILED event.`);
+    throw error; // Перебрасываем ошибку, чтобы задача была помечена как failed
+  }
+};
+
 // Главный процессор задач для очереди данных
 const dataProcessor = async (job: Job<DataJobData>) => {
   logger.debug(`[Worker] Picked up job ${job.name} (ID: ${job.id}).`); // Лог получения задачи воркером
+
+  // ---> Проверка флага isUserPaused <--- 
+  if (job.data?.isUserPaused === true) {
+    logger.info(`[Worker] Job ${job.id} (${job.name}) is paused by user. Attempting to move to delayed state and skipping processing.`);
+    try {
+      // Перемещаем в delayed на очень долгий срок (имитация паузы)
+      const VERY_LARGE_DELAY = 24 * 60 * 60 * 1000 * 365 * 10; // 10 лет
+      await (job as any).moveToDelayed(Date.now() + VERY_LARGE_DELAY, undefined, true); // Добавлен токен и флаг
+      logger.info(`[Worker] Job ${job.id} successfully moved to delayed state due to user pause.`);
+      return; // Важно! Завершаем обработку этой задачи воркером
+    } catch (delayError: any) {
+      logger.error(`[Worker] Failed to move user-paused job ${job.id} to delayed state: ${delayError.message}. Job will remain in its current state but processing will be skipped.`, { stack: delayError.stack });
+      // Даже если не удалось переместить, не обрабатываем ее
+      return; 
+    }
+  }
+  // -------------------------------------
+
   switch (job.name) {
     case JOB_TYPES.FETCH_PAIRS:
       await processFetchPairs(job as Job<FetchPairsJobData>);
       break;
     case JOB_TYPES.FETCH_CANDLES:
       await processFetchCandles(job as Job<FetchCandlesJobData>);
+      break;
+    case JOB_TYPES.FETCH_CANDLES_AND_RUN_BACKTEST:
+      await processFetchCandlesAndRunBacktest(job as Job<FetchCandlesAndRunBacktestJobData>);
+      break;
+    case JOB_TYPES.FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST:
+      await processFetchPortfolioDataAndRunBacktest(job as Job<FetchPortfolioDataAndRunBacktestJobData>);
       break;
     default:
       logger.warn(`Unknown job type: ${job.name}`);
@@ -94,23 +335,98 @@ const dataProcessor = async (job: Job<DataJobData>) => {
 const worker = createWorker<DataJobData>(DATA_QUEUE_NAME, dataProcessor);
 
 // --- Добавляем слушателей событий к созданному воркеру --- 
-worker.on('active', (job: Job) => {
-  logger.debug(`[Queue Events] Job ${job.name} (ID: ${job.id}) is active.`);
+worker.on('completed', async (job: Job, result: any) => {
+  const jobId = job?.id; // Определяем jobId здесь
+  const jobName = job?.name || 'unknown';
+  logger.info(`[Queue Events][Worker] Job ${jobName} (ID: ${jobId || 'unknown'}) completed successfully.`);
+
+  try {
+    if (typeof jobId === 'string') { // Проверяем, что jobId это строка
+      const currentJob = await dataQueue.getJob(jobId); // <--- ИСПОЛЬЗУЕМ ПРОВЕРЕННЫЙ jobId
+      if (currentJob) {
+        // ... остальная логика broadcast ...
+        broadcast({
+          type: 'job_updated',
+          jobId: currentJob.id, // ID из currentJob
+          name: currentJob.name,
+          status: 'completed',
+          timestamp: currentJob.timestamp ? new Date(currentJob.timestamp).toISOString() : new Date().toISOString(),
+          data: currentJob.data,
+          opts: currentJob.opts,
+          attemptsMade: currentJob.attemptsMade,
+          processedOn: currentJob.processedOn ? new Date(currentJob.processedOn).toISOString() : null,
+          finishedOn: currentJob.finishedOn ? new Date(currentJob.finishedOn).toISOString() : new Date().toISOString(),
+          failedReason: currentJob.failedReason,
+          progress: currentJob.progress,
+          returnValue: result
+        });
+        logger.debug(`[Worker Listener - completed] Broadcast sent for job ${jobId}.`);
+      } else {
+        logger.warn(`[Worker Listener - completed] Could not get job ${jobId} from queue for broadcasting.`);
+      }
+    } else {
+      logger.warn(`[Worker Listener - completed] Job ID is undefined. Skipping broadcast for job object:`, job);
+    }
+    broadcastJobCounts();
+  } catch (error) {
+    logger.error(`[Worker Listener - completed] Error during broadcast for job ${jobId || 'unknown'}:`, error);
+    broadcastJobCounts();
+  }
 });
 
-worker.on('completed', (job: Job, result: any) => {
-  // Используем logger.info для успешного завершения
-  logger.info(`[Queue Events] Job ${job.name} (ID: ${job.id}) completed successfully.`);
-  // Старый debug лог можно оставить, если он полезен
-  logger.debug(`Job ${job.name} (ID: ${job.id}) completed.`);
-});
+// --- Обработчик 'failed' --- 
+worker.on('failed', async (job: Job | undefined, error: Error) => {
+  const jobId = job?.id;
+  const jobName = job?.name || 'unknown';
+  logger.error(`[Queue Events][Worker] Job ${jobName} (ID: ${jobId || 'unknown'}) failed:`, error);
+  try {
+    let jobDataToSend: any;
+    let currentJob: Job | null = null;
+    if (job && job.id) {
+       currentJob = await dataQueue.getJob(job.id); 
+    }
+    
+    if(currentJob) {
+      jobDataToSend = {
+        type: 'job_updated',
+        jobId: currentJob.id,
+        name: currentJob.name,
+        status: 'failed', 
+        timestamp: currentJob.timestamp ? new Date(currentJob.timestamp).toISOString() : null,
+        processedOn: currentJob.processedOn ? new Date(currentJob.processedOn).toISOString() : null,
+        finishedOn: currentJob.finishedOn ? new Date(currentJob.finishedOn).toISOString() : new Date().toISOString(),
+        failedReason: currentJob.failedReason || error.message,
+        stacktrace: currentJob.stacktrace || (error.stack ? error.stack.split('\n') : null),
+        data: currentJob.data,
+        opts: currentJob.opts,
+        attemptsMade: currentJob.attemptsMade
+      };
+      logger.debug(`[Worker Listener - failed] Broadcast sent for job ${jobId || 'unknown'}.`);
+    } else {
+      logger.warn(`[Worker Listener - failed] Could not get job ${jobId || 'unknown'} from queue. Broadcasting minimal info.`);
+       jobDataToSend = {
+        type: 'job_updated',
+        jobId: jobId || 'unknown',
+        name: jobName,
+        status: 'failed',
+        failedReason: error.message,
+        timestamp: new Date().toISOString() 
+      };
+    }
+    broadcast(jobDataToSend);
+    
+    // ---> Убираем if (typeof jobId === 'string') вокруг broadcastJobCounts <--- 
+    // Логирование, вызывавшее ошибку, уже закомментировано.
+    // Вызываем broadcastJobCounts в любом случае, т.к. он не зависит от jobId.
+    logger.debug(`[Worker Listener - failed] Broadcasting job counts after attempting to process job ${jobId || 'unknown'}.`);
+    broadcastJobCounts(); 
 
-worker.on('failed', (job: Job | undefined, error: Error) => {
-  if (job) {
-    logger.error(`[Queue Events] Job ${job.name} (ID: ${job.id}) failed:`, error);
-  } else {
-    // Это может произойти, если ошибка случилась до того, как job стал доступен
-    logger.error(`[Queue Events] A job failed (job data unavailable):`, error);
+  } catch(broadcastError) { 
+    logger.error(`[Worker Listener - failed] Error during broadcast for job ${jobId || 'unknown'}:`, broadcastError);
+    // ---> Убираем if (typeof jobId === 'string') вокруг broadcastJobCounts <--- 
+    // Вызываем broadcastJobCounts в любом случае, т.к. он не зависит от jobId.
+    logger.debug(`[Worker Listener - failed] Attempting to broadcast job counts despite broadcast error for job ${jobId || 'unknown'}.`);
+    broadcastJobCounts(); 
   }
 });
 
@@ -137,4 +453,4 @@ logger.info('Data Worker instance created and listeners attached.');
 export { worker as dataWorker };
 
 // Экспортируем типы задач для использования в контроллере
-export type { FetchCandlesJobData, FetchPairsJobData }; 
+export type { FetchCandlesJobData, FetchPairsJobData, FetchPortfolioDataAndRunBacktestJobData }; 

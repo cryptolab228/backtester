@@ -70,15 +70,22 @@ export class DataService {
         volumeQuote: c.volumeQuote,
       }));
 
-      // Используем insert и onConflict для игнорирования дубликатов
-      // Это эффективнее для больших объемов данных, чем upsert или find/save
-      await this.candleRepository
-        .createQueryBuilder()
-        .insert()
-        .into(Candle)
-        .values(candleEntities)
-        .onConflict(`("pair_id", "timestamp", "timeframe") DO NOTHING`) // Игнорировать при конфликте уникального индекса
-        .execute();
+      // Определяем размер чанка
+      const chunkSize = 1000; // Можно настроить
+      for (let i = 0; i < candleEntities.length; i += chunkSize) {
+        const chunk = candleEntities.slice(i, i + chunkSize);
+        logger.debug(`Processing chunk ${i / chunkSize + 1}: ${chunk.length} candles for ${symbol} (${timeframe})`);
+        
+        // Используем insert и onConflict для игнорирования дубликатов
+        // Это эффективнее для больших объемов данных, чем upsert или find/save
+        await this.candleRepository
+          .createQueryBuilder()
+          .insert()
+          .into(Candle)
+          .values(chunk) // Вставляем чанк
+          .onConflict(`("pair_id", "timestamp", "timeframe") DO NOTHING`) // Игнорировать при конфликте уникального индекса
+          .execute();
+      }
 
       logger.info(`Successfully processed ${candles.length} candles for ${symbol} (${timeframe}). Duplicates (if any) were ignored.`);
 
@@ -143,6 +150,25 @@ export class DataService {
     } catch (error) {
       logger.error('Error fetching all trading pairs from DB:', error);
       return []; // Возвращаем пустой массив в случае ошибки
+    }
+  }
+
+  /**
+   * Получает торговую пару по символу.
+   */
+  async getTradingPairBySymbol(symbol: string): Promise<TradingPair | null> {
+    logger.debug(`Fetching trading pair by symbol from DB: ${symbol}`);
+    try {
+      const pair = await this.pairRepository.findOne({ where: { symbol } });
+      if (pair) {
+        logger.debug(`Trading pair ${symbol} found in DB.`);
+      } else {
+        logger.debug(`Trading pair ${symbol} not found in DB.`);
+      }
+      return pair;
+    } catch (error) {
+      logger.error(`Error fetching trading pair ${symbol} from DB:`, error);
+      return null;
     }
   }
 

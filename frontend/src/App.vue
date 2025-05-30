@@ -1,8 +1,10 @@
 <script setup lang="ts">
 // Основной компонент приложения, рендерит текущий роут
+import Toast from 'primevue/toast'; // Импортируем компонент Toast
 </script>
 
 <template>
+  <Toast /> <!-- Добавляем компонент Toast -->
   <router-view />
 </template>
 
