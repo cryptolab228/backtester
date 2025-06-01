@@ -39,6 +39,12 @@ export const useBacktestStore = defineStore('backtest', {
       this.clearResults();
     },
 
+    // Новая функция для безопасного восстановления режима без очистки результатов
+    restorePortfolioMode(isPortfolio: boolean) {
+      this.isPortfolioMode = isPortfolio;
+      // НЕ вызываем clearResults() при восстановлении состояния
+    },
+
     async runBacktest(params: BacktestRunParameters): Promise<AxiosResponse<any>> {
       if (this.currentAbortController) {
         console.warn('[BacktestStore] A backtest operation was already in progress. Aborting the previous one.');

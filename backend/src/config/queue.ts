@@ -42,7 +42,7 @@ export const createQueue = (queueName: string) => {
 export const createWorker = <T = any, R = any>(queueName: string, processor: (job: Job<T>) => Promise<R>) => {
   return new Worker<T, R>(queueName, processor, {
     connection,
-    concurrency: 1 // <-- Устанавливаем конкурентность в 1
+    concurrency: 3, // Увеличиваем с 1 до 3 для лучшей производительности
   });
 };
 
@@ -237,65 +237,4 @@ export const attachQueueEventListeners = () => {
 // attachQueueEventListeners(); 
 // ПРИМЕЧАНИЕ: Убедитесь, что эта функция вызывается где-то в вашем основном файле приложения (например, app.ts) ПОСЛЕ инициализации dataQueue.
 
-// --- Старый код добавления слушателей (ЗАКОММЕНТИРОВАН) --- 
-/*
-logger.info('BullMQ DataQueue event listeners attached.');
-
-// Добавляем слушателей событий для dataQueue
-(dataQueue as any).on('error', (error: Error) => {
-// ... (старые обработчики) ...
-});
-// ... (и т.д. для всех старых обработчиков)
-(dataQueue as any).on('removed', (job: any) => {
-  logger.debug(`[BullMQ DataQueue EVENT:removed] Job ${job.id} removed from queue ${dataQueue.name}.`);
-});
-*/
-
-// ... (остальной код файла, если есть) ...
-
-logger.info('BullMQ DataQueue event listeners attached.');
-
-// Добавляем слушателей событий для dataQueue
-(dataQueue as any).on('error', (error: Error) => {
-  logger.error(`[BullMQ DataQueue EVENT:error] Queue ${dataQueue.name}`, error);
-});
-(dataQueue as any).on('waiting', (jobId: string) => {
-  logger.debug(`[BullMQ DataQueue EVENT:waiting] Job ${jobId} is waiting in queue ${dataQueue.name}.`);
-});
-
-/* // Закомментируем проблемные слушатели для Docker сборки
-(dataQueue as any).on('active', (job: BullMQ.Job<any, any, string>) => {
-  logger.info(`[BullMQ DataQueue EVENT:active] Job ${job.id} is active in queue ${dataQueue.name}.`);
-});
-(dataQueue as any).on('stalled', (job: BullMQ.Job<any, any, string>) => {
-  logger.warn(`[BullMQ DataQueue EVENT:stalled] Job ${job.id} has stalled in queue ${dataQueue.name}.`);
-});
-*/
-(dataQueue as any).on('progress', (job: any, progress: any) => {
-  logger.debug(`[BullMQ DataQueue EVENT:progress] Job ${job.id} in queue ${dataQueue.name} progress ${typeof progress === 'object' ? JSON.stringify(progress) : progress}.`);
-});
-/* // Закомментируем проблемные слушатели для Docker сборки
-(dataQueue as any).on('completed', (job: BullMQ.Job<any, any, string>, result: any) => {
-  logger.info(`[BullMQ DataQueue EVENT:completed] Job ${job.id} in queue ${dataQueue.name} completed.`);
-});
-(dataQueue as any).on('failed', (job: BullMQ.Job<any, any, string> | undefined, err: Error) => {
-  logger.error(`[BullMQ DataQueue EVENT:failed] Job ${job?.id || 'unknown'} in queue ${dataQueue.name} failed with error: ${err.message}`, { stack: err.stack, jobName: job?.name, jobData: job?.data });
-});
-*/
-(dataQueue as any).on('paused', () => {
-  logger.info(`[BullMQ DataQueue EVENT:paused] Queue ${dataQueue.name} is paused.`);
-});
-(dataQueue as any).on('resumed', () => {
-  logger.info(`[BullMQ DataQueue EVENT:resumed] Queue ${dataQueue.name} is resumed.`);
-});
-(dataQueue as any).on('cleaned', (jobs: string[], type: string) => {
-  logger.info(`[BullMQ DataQueue EVENT:cleaned] Cleaned ${jobs.length} ${type} jobs from queue ${dataQueue.name}. Jobs: ${jobs.join(', ')}`);
-});
-/* // Закомментируем проблемные слушатели для Docker сборки
-(dataQueue as any).on('drained', () => {
-  logger.info(`[BullMQ DataQueue EVENT:drained] Queue ${dataQueue.name} is drained.`);
-});
-*/
-(dataQueue as any).on('removed', (job: any) => {
-  logger.debug(`[BullMQ DataQueue EVENT:removed] Job ${job.id} removed from queue ${dataQueue.name}.`);
-}); 
+// Удалены дублирующиеся обработчики событий, которые были внизу файла 

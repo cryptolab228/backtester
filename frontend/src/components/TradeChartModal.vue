@@ -3,7 +3,7 @@
     v-model:visible="isVisible" 
     modal 
     :header="dialogTitle"
-    :style="{ width: '90vw', maxWidth: '1200px' }"
+    :style="{ width: '95vw', maxWidth: '1400px' }"
     class="trade-chart-modal"
     @hide="onClose"
   >
@@ -58,6 +58,10 @@
             <div class="text-sm text-gray-600">Take Profit</div>
             <div class="font-semibold text-green-600">${{ trade.takeProfit?.toFixed(4) }}</div>
           </div>
+          <div v-if="riskRewardRatio !== 'N/A'">
+            <div class="text-sm text-gray-600">Risk/Reward</div>
+            <div class="font-semibold text-purple-600">{{ riskRewardRatio }}</div>
+          </div>
           <div>
             <div class="text-sm text-gray-600">Время входа</div>
             <div class="font-semibold text-gray-800">{{ formatDate(trade.entryTimestamp) }}</div>
@@ -72,7 +76,7 @@
       <!-- TradingView График -->
       <div class="bg-white rounded-lg border border-gray-200">
         <div class="flex items-center justify-between p-4 border-b border-gray-200">
-          <h4 class="text-lg font-semibold text-gray-900">График сделки (TradingView)</h4>
+          <h4 class="text-lg font-semibold text-gray-900">График сделки (Полный диапазон)</h4>
           <div class="flex items-center space-x-2">
             <Button 
               v-if="chartInstance" 
@@ -102,22 +106,22 @@
         <div class="p-4">
           <div v-if="isLoadingChart" class="flex justify-center items-center py-12">
             <ProgressSpinner animationDuration=".8s" strokeWidth="4"/>
-            <span class="ml-3 text-gray-600">Загрузка TradingView графика...</span>
+            <span class="ml-3 text-gray-600">Загрузка графика сделки...</span>
           </div>
           
-          <div v-else-if="hasChartData" class="chart-container" ref="chartContainer" style="height: 500px; border-radius: 8px;"></div>
+          <div v-else-if="hasChartData" class="chart-container" ref="chartContainer" style="height: 600px; border-radius: 8px;"></div>
           
           <div v-else class="text-center py-12">
             <i class="pi pi-chart-line text-6xl text-gray-300 mb-4"></i>
-            <h4 class="text-lg text-gray-500 mb-2">TradingView График сделки</h4>
+            <h4 class="text-lg text-gray-500 mb-2">График сделки</h4>
             <p class="text-gray-400">Данные графика недоступны для этой сделки</p>
           </div>
         </div>
       </div>
 
-      <!-- Улучшенная легенда для TradingView -->
+      <!-- Улучшенная легенда -->
       <div class="bg-gray-50 rounded-lg p-4">
-        <h4 class="text-lg font-semibold text-gray-900 mb-3">Легенда TradingView</h4>
+        <h4 class="text-lg font-semibold text-gray-900 mb-3">Легенда графика</h4>
         <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
           <div class="flex items-center">
             <div class="w-4 h-4 bg-gray-400 border border-gray-600 mr-2"></div>
@@ -125,11 +129,11 @@
           </div>
           <div class="flex items-center">
             <div class="w-4 h-4 bg-green-500 rounded-full mr-2"></div>
-            <span class="text-sm text-gray-700">Вход в позицию</span>
+            <span class="text-sm text-gray-700">Точка входа (Entry)</span>
           </div>
           <div class="flex items-center">
             <div class="w-4 h-4 bg-red-500 rounded-full mr-2"></div>
-            <span class="text-sm text-gray-700">Выход из позиции</span>
+            <span class="text-sm text-gray-700">Точка выхода (Exit)</span>
           </div>
           <div class="flex items-center">
             <div class="w-4 h-1 bg-red-400 mr-2"></div>
@@ -151,7 +155,7 @@
       <div class="flex justify-between items-center w-full">
         <div class="text-sm text-gray-500">
           <i class="pi pi-info-circle mr-1"></i>
-          Powered by TradingView Lightweight Charts
+          Powered by TradingView Lightweight Charts v{{ lightweightChartsVersion }}
         </div>
         <Button label="Закрыть" icon="pi pi-times" @click="onClose" class="p-button-text" />
       </div>
@@ -169,7 +173,8 @@ import {
   CandlestickSeries,
   LineSeries,
   AreaSeries,
-  HistogramSeries
+  HistogramSeries,
+  createSeriesMarkers
 } from 'lightweight-charts';
 import type { IChartApi, ISeriesApi, Time } from 'lightweight-charts';
 import Dialog from 'primevue/dialog';
@@ -205,7 +210,11 @@ const chartContainer = ref<HTMLElement | null>(null);
 const chartInstance = ref<IChartApi | null>(null);
 const candlestickSeries = ref<ISeriesApi<'Candlestick'> | null>(null);
 const volumeSeries = ref<ISeriesApi<'Histogram'> | null>(null);
+const stopLossLineSeries = ref<ISeriesApi<'Line'> | null>(null);
+const takeProfitLineSeries = ref<ISeriesApi<'Line'> | null>(null);
+const seriesMarkersInstance = ref<any | null>(null);
 const isLoadingChart = ref(false);
+const lightweightChartsVersion = ref('5.x');
 
 // Chart type selection
 const selectedChartType = ref<'candlestick' | 'line' | 'area'>('candlestick');
@@ -221,12 +230,26 @@ const isVisible = computed({
 });
 
 const dialogTitle = computed(() => {
-  if (!props.trade) return 'TradingView График сделки';
-  return `TradingView График: ${props.trade.pair || 'Unknown'} - ${props.trade.direction?.toUpperCase()}`;
+  if (!props.trade) return 'График сделки';
+  return `График: ${props.trade.pair || 'Unknown'} - ${props.trade.direction?.toUpperCase()} - ${formatDate(props.trade.entryTimestamp)}`;
 });
 
 const hasChartData = computed(() => {
   return props.candleData && props.candleData.length > 0;
+});
+
+const riskRewardRatio = computed(() => {
+  if (!props.trade || !props.trade.entryPrice || !props.trade.stopLoss || !props.trade.takeProfit) {
+    return 'N/A';
+  }
+  
+  const risk = Math.abs(props.trade.entryPrice - props.trade.stopLoss);
+  const reward = Math.abs(props.trade.takeProfit - props.trade.entryPrice);
+  
+  if (risk === 0) return 'N/A';
+  
+  const ratio = reward / risk;
+  return `1:${ratio.toFixed(2)}`;
 });
 
 const createTradingViewChart = async () => {
@@ -242,10 +265,69 @@ const createTradingViewChart = async () => {
   isLoadingChart.value = true;
   
   try {
+    console.log(`[TradeChart] Starting chart creation with ${props.candleData!.length} original candles`);
+
+    // КАРДИНАЛЬНАЯ ОЧИСТКА ДАННЫХ ОТ ДУБЛИКАТОВ
+    const rawCandles = props.candleData!;
+    const cleanedCandles: any[] = [];
+    const usedTimestamps = new Set<number>();
+
+    // Проходим по данным и удаляем дубликаты
+    rawCandles.forEach((candle, index) => {
+      const timestamp = Math.floor(candle.timestamp / 1000);
+      
+      if (!usedTimestamps.has(timestamp)) {
+        usedTimestamps.add(timestamp);
+        cleanedCandles.push({
+          time: timestamp as Time,
+          open: Number(candle.open),
+          high: Number(candle.high),
+          low: Number(candle.low),
+          close: Number(candle.close),
+          volume: Number(candle.volume || 0),
+          originalTimestamp: candle.timestamp
+        });
+      } else {
+        console.warn(`[TradeChart] Skipping duplicate timestamp: ${timestamp} at index ${index}`);
+      }
+    });
+
+    // Сортируем по времени
+    cleanedCandles.sort((a, b) => Number(a.time) - Number(b.time));
+
+    // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА - удаляем любые нарушения последовательности
+    const finalCandles: any[] = [];
+    let lastTime = 0;
+
+    cleanedCandles.forEach((candle, index) => {
+      const currentTime = Number(candle.time);
+      if (currentTime > lastTime) {
+        finalCandles.push(candle);
+        lastTime = currentTime;
+      } else {
+        console.warn(`[TradeChart] Removing candle with invalid time sequence: ${currentTime} <= ${lastTime} at index ${index}`);
+      }
+    });
+
+    console.log(`[TradeChart] Data cleaned: ${rawCandles.length} -> ${cleanedCandles.length} -> ${finalCandles.length} candles`);
+
+    if (finalCandles.length === 0) {
+      throw new Error('No valid candle data after cleaning');
+    }
+
+    // Подготавливаем данные для TradingView
+    const candleDataFormatted = finalCandles.map(candle => ({
+      time: candle.time,
+      open: candle.open,
+      high: candle.high,
+      low: candle.low,
+      close: candle.close,
+    }));
+
     // Создаем TradingView chart
     chartInstance.value = createChart(chartContainer.value, {
       width: chartContainer.value.clientWidth,
-      height: 500,
+      height: 600,
       layout: {
         background: { type: ColorType.Solid, color: '#ffffff' },
         textColor: '#333',
@@ -270,8 +352,8 @@ const createTradingViewChart = async () => {
       rightPriceScale: {
         borderColor: '#cccccc',
         scaleMargins: {
-          top: 0.1,
-          bottom: 0.2,
+          top: 0.05,
+          bottom: 0.15,
         },
       },
       timeScale: {
@@ -292,16 +374,7 @@ const createTradingViewChart = async () => {
       },
     });
 
-    // Подготавливаем данные свечей для TradingView
-    const candleDataFormatted = props.candleData!.map(candle => ({
-      time: Math.floor(candle.timestamp / 1000) as Time,
-      open: candle.open,
-      high: candle.high,
-      low: candle.low,
-      close: candle.close,
-    }));
-
-    // Создаем основную серию (свечи, линия или область)
+    // Создаем основную серию свечей
     let mainSeries: ISeriesApi<any>;
     
     if (selectedChartType.value === 'candlestick') {
@@ -313,12 +386,20 @@ const createTradingViewChart = async () => {
         wickDownColor: '#ff4444',
         wickUpColor: '#00C851',
       });
+      
+      // БЕЗОПАСНАЯ УСТАНОВКА ДАННЫХ
+      try {
+        mainSeries.setData(candleDataFormatted);
+        console.log(`[TradeChart] Successfully set ${candleDataFormatted.length} candles to main series`);
+      } catch (dataError) {
+        console.error('[TradeChart] Error setting candle data:', dataError);
+        throw dataError;
+      }
     } else if (selectedChartType.value === 'line') {
       mainSeries = chartInstance.value.addSeries(LineSeries, {
         color: '#2962FF',
         lineWidth: 2,
       });
-      // Для линейного графика используем только цены закрытия
       const lineData = candleDataFormatted.map(candle => ({
         time: candle.time,
         value: candle.close,
@@ -331,7 +412,6 @@ const createTradingViewChart = async () => {
         lineColor: '#2962FF',
         lineWidth: 2,
       });
-      // Для области используем только цены закрытия
       const areaData = candleDataFormatted.map(candle => ({
         time: candle.time,
         value: candle.close,
@@ -339,127 +419,241 @@ const createTradingViewChart = async () => {
       mainSeries.setData(areaData);
     }
 
-    if (selectedChartType.value === 'candlestick') {
-      mainSeries.setData(candleDataFormatted);
-    }
-
     candlestickSeries.value = mainSeries;
 
     // Добавляем Volume серию если есть данные
-    if (props.candleData!.some(candle => candle.volume && candle.volume > 0)) {
-      volumeSeries.value = chartInstance.value.addSeries(HistogramSeries, {
-        color: '#26a69a',
-        priceFormat: {
-          type: 'volume',
-        },
-        priceScaleId: '',
-      });
+    const validVolumeCandles = finalCandles.filter(candle => candle.volume && candle.volume > 0);
+    if (validVolumeCandles.length > 0) {
+      try {
+        volumeSeries.value = chartInstance.value.addSeries(HistogramSeries, {
+          color: '#26a69a',
+          priceFormat: {
+            type: 'volume',
+          },
+          priceScaleId: '',
+        });
 
-      const volumeData = props.candleData!
-        .filter(candle => candle.volume && candle.volume > 0)
-        .map(candle => ({
-          time: Math.floor(candle.timestamp / 1000) as Time,
-          value: candle.volume!,
+        const volumeData = validVolumeCandles.map(candle => ({
+          time: candle.time,
+          value: candle.volume,
           color: candle.close >= candle.open ? '#26a69a40' : '#ef534040',
         }));
 
-      volumeSeries.value?.setData(volumeData);
+        volumeSeries.value?.setData(volumeData);
+        console.log(`[TradeChart] Volume series added with ${volumeData.length} data points`);
+      } catch (volumeError) {
+        console.warn('[TradeChart] Error adding volume series:', volumeError);
+      }
     }
 
-    // Добавляем маркеры сделки
-    addTradeMarkers(mainSeries);
-
     // Добавляем линии Stop Loss и Take Profit
-    addTradeLevels();
+    addTradeLevelsWithRiskReward(finalCandles);
 
-    // Подгоняем масштаб
+    // ПРАВИЛЬНЫЙ МЕТОД - стрелочки через createSeriesMarkers API v5
+    addTradeArrowsWithLines(finalCandles);
+
+    // Подгоняем масштаб для отображения полного диапазона
     chartInstance.value.timeScale().fitContent();
 
+    console.log('[TradeChart] Chart creation completed successfully');
     isLoadingChart.value = false;
   } catch (error) {
     console.error('Error creating TradingView chart:', error);
     isLoadingChart.value = false;
-  }
-};
-
-const addTradeMarkers = (series: ISeriesApi<any>) => {
-  if (!props.trade) return;
-
-  const markers: any[] = [];
-
-  // Маркер входа
-  if (props.trade.entryTimestamp && props.trade.entryPrice) {
-    markers.push({
-      time: Math.floor(props.trade.entryTimestamp / 1000) as Time,
-      position: 'belowBar',
-      color: props.trade.direction === 'long' ? '#00C851' : '#ff4444',
-      shape: 'arrowUp',
-      text: `${props.trade.direction?.toUpperCase()} @ $${props.trade.entryPrice.toFixed(4)}`,
-      size: 2,
-    });
-  }
-
-  // Маркер выхода
-  if (props.trade.exitTimestamp && props.trade.exitPrice) {
-    markers.push({
-      time: Math.floor(props.trade.exitTimestamp / 1000) as Time,
-      position: 'aboveBar',
-      color: (props.trade.pnl || 0) >= 0 ? '#00C851' : '#ff4444',
-      shape: 'arrowDown',
-      text: `EXIT @ $${props.trade.exitPrice.toFixed(4)} | PnL: $${(props.trade.pnl || 0).toFixed(2)}`,
-      size: 2,
-    });
-  }
-
-  // В API v5.0.7 используется setMarkers
-  if (markers.length > 0) {
-    try {
-      (series as any).setMarkers(markers);
-    } catch (error) {
-      console.warn('Markers not supported in this version:', error);
+    
+    // Показываем пользователю конкретную ошибку
+    if (error instanceof Error) {
+      console.error(`[TradeChart] Specific error: ${error.message}`);
     }
   }
 };
 
-const addTradeLevels = () => {
-  if (!chartInstance.value || !props.trade) return;
+// ПРАВИЛЬНЫЙ МЕТОД - стрелочки через createSeriesMarkers API v5
+const addTradeArrowsWithLines = (cleanedCandles: any[]) => {
+  if (!chartInstance.value || !props.trade || cleanedCandles.length === 0 || !candlestickSeries.value) return;
 
-  // Stop Loss линия
-  if (props.trade.stopLoss) {
-    const stopLossLine = chartInstance.value.addSeries(LineSeries, {
-      color: '#ff4444',
-      lineWidth: 2,
-      lineStyle: LineStyle.Dashed,
-      title: `SL: $${props.trade.stopLoss.toFixed(4)}`,
-    });
+  try {
+    console.log('[TradeChart] Adding trade arrows with createSeriesMarkers method');
 
-    const timeRange = props.candleData!;
-    const startTime = Math.floor(timeRange[0].timestamp / 1000) as Time;
-    const endTime = Math.floor(timeRange[timeRange.length - 1].timestamp / 1000) as Time;
+    const markers: any[] = [];
 
-    stopLossLine.setData([
-      { time: startTime, value: props.trade.stopLoss },
-      { time: endTime, value: props.trade.stopLoss },
-    ]);
+    // Стрелочка входа
+    if (props.trade.entryTimestamp && props.trade.entryPrice) {
+      const entryTime = Math.floor(props.trade.entryTimestamp / 1000) as Time;
+      
+      console.log(`[TradeChart] Adding entry marker at time ${entryTime}, price ${props.trade.entryPrice}`);
+
+      markers.push({
+        time: entryTime,
+        position: 'belowBar',
+        color: props.trade.direction === 'long' ? '#00C851' : '#ff4444',
+        shape: 'arrowUp',
+        text: `ENTRY: $${props.trade.entryPrice.toFixed(4)}`,
+        size: 2,
+      });
+    }
+
+    // Стрелочка выхода
+    if (props.trade.exitTimestamp && props.trade.exitPrice) {
+      const exitTime = Math.floor(props.trade.exitTimestamp / 1000) as Time;
+      const pnlText = (props.trade.pnl || 0) >= 0 ? `+$${(props.trade.pnl || 0).toFixed(2)}` : `-$${Math.abs(props.trade.pnl || 0).toFixed(2)}`;
+      
+      console.log(`[TradeChart] Adding exit marker at time ${exitTime}, price ${props.trade.exitPrice}`);
+
+      markers.push({
+        time: exitTime,
+        position: 'aboveBar',
+        color: (props.trade.pnl || 0) >= 0 ? '#00C851' : '#ff4444',
+        shape: 'arrowDown',
+        text: `EXIT: $${props.trade.exitPrice.toFixed(4)} | ${pnlText}`,
+        size: 2,
+      });
+    }
+
+    // Используем правильный API для v5
+    if (markers.length > 0) {
+      try {
+        console.log(`[TradeChart] Creating series markers with ${markers.length} markers`);
+        seriesMarkersInstance.value = createSeriesMarkers(candlestickSeries.value, markers);
+        console.log('[TradeChart] Series markers created successfully');
+      } catch (markerError) {
+        console.error('[TradeChart] Error creating series markers:', markerError);
+        // Fallback к горизонтальным линиям если маркеры не работают
+        addTradeArrowsAsFallback(cleanedCandles);
+      }
+    }
+
+    console.log('[TradeChart] Trade arrows added successfully');
+  } catch (error) {
+    console.error('[TradeChart] Error adding trade arrows:', error);
+    // Fallback к горизонтальным линиям
+    addTradeArrowsAsFallback(cleanedCandles);
   }
+};
 
-  // Take Profit линия
-  if (props.trade.takeProfit) {
-    const takeProfitLine = chartInstance.value.addSeries(LineSeries, {
-      color: '#00C851',
-      lineWidth: 2,
-      lineStyle: LineStyle.Dashed,
-      title: `TP: $${props.trade.takeProfit.toFixed(4)}`,
-    });
+// Fallback метод с горизонтальными линиями
+const addTradeArrowsAsFallback = (cleanedCandles: any[]) => {
+  if (!chartInstance.value || !props.trade || cleanedCandles.length === 0) return;
 
-    const timeRange = props.candleData!;
-    const startTime = Math.floor(timeRange[0].timestamp / 1000) as Time;
-    const endTime = Math.floor(timeRange[timeRange.length - 1].timestamp / 1000) as Time;
+  try {
+    console.log('[TradeChart] Using fallback method with horizontal lines');
 
-    takeProfitLine.setData([
-      { time: startTime, value: props.trade.takeProfit },
-      { time: endTime, value: props.trade.takeProfit },
-    ]);
+    // Добавляем горизонтальную линию входа
+    if (props.trade.entryTimestamp && props.trade.entryPrice) {
+      const entryPriceLine = chartInstance.value.addSeries(LineSeries, {
+        color: props.trade.direction === 'long' ? '#00C851' : '#ff4444',
+        lineWidth: 2,
+        lineStyle: LineStyle.Dotted,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        title: `Entry: $${props.trade.entryPrice.toFixed(4)}`,
+      });
+
+      const firstTime = cleanedCandles[0].time;
+      const lastTime = cleanedCandles[cleanedCandles.length - 1].time;
+      
+      entryPriceLine.setData([
+        { time: firstTime, value: props.trade.entryPrice },
+        { time: lastTime, value: props.trade.entryPrice },
+      ]);
+    }
+
+    // Добавляем горизонтальную линию выхода
+    if (props.trade.exitTimestamp && props.trade.exitPrice) {
+      const exitPriceLine = chartInstance.value.addSeries(LineSeries, {
+        color: (props.trade.pnl || 0) >= 0 ? '#00C851' : '#ff4444',
+        lineWidth: 2,
+        lineStyle: LineStyle.Dotted,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        title: `Exit: $${props.trade.exitPrice.toFixed(4)}`,
+      });
+
+      const firstTime = cleanedCandles[0].time;
+      const lastTime = cleanedCandles[cleanedCandles.length - 1].time;
+      
+      exitPriceLine.setData([
+        { time: firstTime, value: props.trade.exitPrice },
+        { time: lastTime, value: props.trade.exitPrice },
+      ]);
+    }
+
+    console.log('[TradeChart] Fallback arrows added successfully');
+  } catch (fallbackError) {
+    console.error('[TradeChart] Error in fallback method:', fallbackError);
+  }
+};
+
+// Обновленная функция для TP/SL с Risk/Reward
+const addTradeLevelsWithRiskReward = (cleanedCandles: any[]) => {
+  if (!chartInstance.value || !props.trade || cleanedCandles.length === 0) return;
+
+  try {
+    const startTime = cleanedCandles[0].time;
+    const endTime = cleanedCandles[cleanedCandles.length - 1].time;
+
+    console.log('[TradeChart] Adding trade levels (TP/SL)');
+
+    // Вычисляем Risk/Reward ratio
+    let riskRewardRatio = 'N/A';
+    if (props.trade.entryPrice && props.trade.stopLoss && props.trade.takeProfit) {
+      const risk = Math.abs(props.trade.entryPrice - props.trade.stopLoss);
+      const reward = Math.abs(props.trade.takeProfit - props.trade.entryPrice);
+      if (risk > 0) {
+        const ratio = reward / risk;
+        riskRewardRatio = `1:${ratio.toFixed(2)}`;
+      }
+    }
+
+    // Stop Loss линия
+    if (props.trade.stopLoss) {
+      try {
+        stopLossLineSeries.value = chartInstance.value.addSeries(LineSeries, {
+          color: '#ff4444',
+          lineWidth: 2,
+          lineStyle: LineStyle.Dashed,
+          title: `Stop Loss: $${props.trade.stopLoss.toFixed(4)}`,
+          priceLineVisible: true,
+          lastValueVisible: true,
+        });
+
+        stopLossLineSeries.value.setData([
+          { time: startTime, value: props.trade.stopLoss },
+          { time: endTime, value: props.trade.stopLoss },
+        ]);
+        
+        console.log(`[TradeChart] Stop Loss line added at ${props.trade.stopLoss}`);
+      } catch (slError) {
+        console.warn('[TradeChart] Error adding Stop Loss line:', slError);
+      }
+    }
+
+    // Take Profit линия
+    if (props.trade.takeProfit) {
+      try {
+        takeProfitLineSeries.value = chartInstance.value.addSeries(LineSeries, {
+          color: '#00C851',
+          lineWidth: 2,
+          lineStyle: LineStyle.Dashed,
+          title: `Take Profit: $${props.trade.takeProfit.toFixed(4)} | R:R ${riskRewardRatio}`,
+          priceLineVisible: true,
+          lastValueVisible: true,
+        });
+
+        takeProfitLineSeries.value.setData([
+          { time: startTime, value: props.trade.takeProfit },
+          { time: endTime, value: props.trade.takeProfit },
+        ]);
+        
+        console.log(`[TradeChart] Take Profit line added at ${props.trade.takeProfit} with R:R ${riskRewardRatio}`);
+      } catch (tpError) {
+        console.warn('[TradeChart] Error adding Take Profit line:', tpError);
+      }
+    }
+
+    console.log(`[TradeChart] Trade levels completed with Risk/Reward ratio: ${riskRewardRatio}`);
+  } catch (error) {
+    console.error('[TradeChart] Error adding trade levels:', error);
   }
 };
 
@@ -475,14 +669,14 @@ const refreshChart = () => {
 
 const downloadChart = () => {
   if (chartInstance.value) {
-    // TradingView не поддерживает прямой экспорт, но можно использовать html2canvas
     try {
       const canvas = chartContainer.value?.querySelector('canvas');
       if (canvas) {
         const url = canvas.toDataURL('image/png');
         const link = document.createElement('a');
         const tradeName = props.trade ? `${props.trade.pair}-${props.trade.direction}` : 'trade';
-        link.download = `tradingview-chart-${tradeName}-${Date.now()}.png`;
+        const timestamp = props.trade?.entryTimestamp ? new Date(props.trade.entryTimestamp).toISOString().slice(0, 19).replace(/[:-]/g, '') : Date.now();
+        link.download = `chart-${tradeName}-${timestamp}.png`;
         link.href = url;
         document.body.appendChild(link);
         link.click();
@@ -515,7 +709,7 @@ const handleResize = () => {
   if (chartInstance.value && chartContainer.value) {
     chartInstance.value.applyOptions({
       width: chartContainer.value.clientWidth,
-      height: 500,
+      height: 600,
     });
   }
 };
@@ -554,6 +748,7 @@ onUnmounted(() => {
   position: relative;
   border-radius: 8px;
   overflow: hidden;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
 /* TradingView специфичные стили */
@@ -564,5 +759,21 @@ onUnmounted(() => {
 /* Стили для dropdown */
 :deep(.p-dropdown) {
   min-width: 120px;
+}
+
+/* Улучшенные стили для модального окна */
+.trade-chart-modal :deep(.p-dialog) {
+  max-height: 95vh;
+  overflow-y: auto;
+}
+
+.trade-chart-modal :deep(.p-dialog-header) {
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
+}
+
+.trade-chart-modal :deep(.p-dialog-footer) {
+  border-top: 1px solid #e5e7eb;
+  background: #f9fafb;
 }
 </style> 

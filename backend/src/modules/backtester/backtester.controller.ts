@@ -59,6 +59,18 @@ export const runBacktestHandler = async (req: Request, res: Response): Promise<v
         return;
     }
 
+    // Проверка логики дат - дата начала должна быть раньше даты окончания
+    if (startTimestamp >= endTimestamp) {
+        logger.warn('[BacktesterCtrl] Invalid date range: startDate must be before endDate.', { 
+            startDate: incomingParams.startDate, 
+            endDate: incomingParams.endDate,
+            startTimestamp,
+            endTimestamp
+        });
+        res.status(400).json({ message: 'Invalid date range: start date must be before end date.' });
+        return;
+    }
+
     // 0. Проверяем существование торговой пары
     const tradingPair = await dataService.getTradingPairBySymbol(incomingParams.pairSymbol);
     if (!tradingPair) {
@@ -216,6 +228,18 @@ export const runPortfolioBacktestHandler = async (req: Request, res: Response): 
     if (isNaN(startTimestamp) || isNaN(endTimestamp)) {
         logger.warn('[PortfolioBacktesterCtrl] Invalid date format for startDate or endDate.', { startDate: incomingParams.startDate, endDate: incomingParams.endDate });
         res.status(400).json({ message: 'Invalid date format for start or end date.' });
+        return;
+    }
+
+    // Проверка логики дат - дата начала должна быть раньше даты окончания
+    if (startTimestamp >= endTimestamp) {
+        logger.warn('[PortfolioBacktesterCtrl] Invalid date range: startDate must be before endDate.', { 
+            startDate: incomingParams.startDate, 
+            endDate: incomingParams.endDate,
+            startTimestamp,
+            endTimestamp
+        });
+        res.status(400).json({ message: 'Invalid date range: start date must be before end date.' });
         return;
     }
 

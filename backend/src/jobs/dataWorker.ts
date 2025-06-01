@@ -82,19 +82,44 @@ const processFetchCandles = async (job: Job<FetchCandlesJobData>) => {
   try {
     logger.info(`Starting processFetchCandles for job ID: ${job.id}, symbol: ${symbol}, timeframe: ${timeframe}`);
     logger.debug(`[Job ${job.id}] Calling okxService.getHistoricalCandles for ${symbol}...`);
-    const candles = await okxService.getHistoricalCandles(symbol, timeframe, startTime, endTime, limit);
+    
+    // Добавляем таймаут для предотвращения зависания при загрузке данных
+    const fetchPromise = okxService.getHistoricalCandles(symbol, timeframe, startTime, endTime, limit);
+    const timeoutPromise = new Promise<never>((_, reject) => 
+      setTimeout(() => reject(new Error(`OKX API timeout for ${symbol} after 5 minutes`)), 5 * 60 * 1000)
+    );
+    
+    const candles = await Promise.race([fetchPromise, timeoutPromise]);
     logger.debug(`[Job ${job.id}] Fetched ${candles.length} candles for ${symbol} from OKX.`);
 
     if (candles.length > 0) {
       logger.debug(`[Job ${job.id}] Calling dataService.saveCandles for ${symbol}...`);
       await dataService.saveCandles(symbol, timeframe, candles);
       logger.debug(`[Job ${job.id}] Finished dataService.saveCandles for ${symbol}.`);
+    } else {
+      logger.info(`[Job ${job.id}] No candles fetched for ${symbol}, skipping database save.`);
     }
 
     logger.info(`Finished processFetchCandles for job ID: ${job.id} successfully.`);
+    
+    // Явно возвращаем результат для правильного завершения задачи
+    return {
+      success: true,
+      symbol,
+      timeframe,
+      candlesProcessed: candles.length,
+      message: `Successfully processed ${candles.length} candles for ${symbol} (${timeframe})`
+    };
 
   } catch (error: any) {
-    logger.error(`Error processing job ${JOB_TYPES.FETCH_CANDLES} (ID: ${job.id}) for ${symbol} (${timeframe}):`, error);
+    logger.error(`Error processing job ${JOB_TYPES.FETCH_CANDLES} (ID: ${job.id}) for ${symbol} (${timeframe}): ${error.message}`, {
+      stack: error.stack,
+      symbol,
+      timeframe,
+      startTime,
+      endTime,
+      limit
+    });
     throw error;
   }
 };

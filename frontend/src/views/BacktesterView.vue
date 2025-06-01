@@ -1,4 +1,4 @@
-<!--
+ходимо<!--
 ВАЖНОЕ АРХИТЕКТУРНОЕ ИЗМЕНЕНИЕ (Отражено в планах проекта promt.md, READMEF.md, docs/BACKTESTER_IMPLEMENTATION_PLAN.md):
 
 Этот компонент (`BacktesterView.vue`) теперь несет основную ответственность за управление параметрами торговой стратегии.
@@ -137,16 +137,27 @@
           <div class="mb-6">
             <h2 class="text-xl font-semibold mb-4 text-gray-800 border-b pb-2">Управление Бектестом</h2>
             
-            <!-- Индикатор восстановленного состояния -->
+            <!-- Индикатор восстановленного состояния и статуса задач -->
             <div v-if="pendingJobId && backtestIsLoading" class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
               <div class="flex items-center">
                 <i class="pi pi-sync spin text-blue-600 mr-2"></i>
                 <div>
-                  <h4 class="text-sm font-medium text-blue-800 mb-1">Активное сканирование</h4>
+                  <h4 class="text-sm font-medium text-blue-800 mb-1">
+                    {{ currentJobStatus === 'waiting' || currentJobStatus === 'wait' ? 'Задача в очереди' : 'Активный бектест' }}
+                  </h4>
                   <p class="text-sm text-blue-700">
                     ID задачи: <span class="font-mono">{{ pendingJobId }}</span>
                   </p>
-                  <p class="text-xs text-blue-600 mt-1">
+                  <p class="text-xs text-blue-600 mt-1" v-if="currentJobStatus">
+                    Статус: <span class="font-semibold">{{ getJobStatusText(currentJobStatus) }}</span>
+                  </p>
+                  <p class="text-xs text-blue-600 mt-1" v-if="currentJobStatus === 'waiting' || currentJobStatus === 'wait'">
+                    ⏳ Задача ожидает обработки в очереди...
+                  </p>
+                  <p class="text-xs text-blue-600 mt-1" v-else-if="currentJobStatus === 'active'">
+                    🔄 Задача выполняется...
+                  </p>
+                  <p class="text-xs text-blue-600 mt-1" v-else>
                     Состояние восстановлено. Ожидание результатов...
                   </p>
                 </div>
@@ -177,6 +188,14 @@
                 @click="resetBacktestSettings" 
                 :disabled="backtestIsLoading"
                 v-tooltip.bottom="'Сбросить параметры стратегии к значениям по умолчанию'"
+              />
+              <Button 
+                label="Проверить активные задачи" 
+                icon="pi pi-search" 
+                class="p-button-info" 
+                @click="manualCheckActiveJobs" 
+                :disabled="backtestIsLoading"
+                v-tooltip.bottom="'Проверить активные задачи на сервере и восстановить состояние'"
               />
             </div>
             <div v-if="backtestIsLoading" class="mt-5">
@@ -574,6 +593,7 @@ const PORTFOLIO_RESULTS_KEY = 'portfolio_backtester_results';
 const ACTIVE_JOB_KEY = 'backtester_active_job';
 const BACKTESTER_MODE_KEY = 'backtester_mode';
 const pendingJobId = ref<string | null>(null);
+const currentJobStatus = ref<string | null>(null);
 const isComponentMounted = ref(false);
 
 let debounceTimer: number | undefined = undefined;
@@ -653,6 +673,7 @@ const handleWebSocketMessage = (event: MessageEvent) => {
         
       if (pendingJobId.value === completedJobId) {
          pendingJobId.value = null;
+         currentJobStatus.value = null;
          backtestStore.clearCurrentAbortController();
          clearActiveJobState();
       }
@@ -685,6 +706,7 @@ const handleWebSocketMessage = (event: MessageEvent) => {
         
       if (pendingJobId.value === completedJobId) {
          pendingJobId.value = null;
+         currentJobStatus.value = null;
          backtestStore.clearCurrentAbortController();
          clearActiveJobState();
       }
@@ -711,6 +733,7 @@ const handleWebSocketMessage = (event: MessageEvent) => {
       backtestStore.isLoading = false;
       if (pendingJobId.value === failedJobId) {
         pendingJobId.value = null;
+        currentJobStatus.value = null;
         backtestStore.clearCurrentAbortController();
       }
 
@@ -756,13 +779,19 @@ const handleWebSocketMessage = (event: MessageEvent) => {
       backtestStore.isLoading = false;
       if (pendingJobId.value === failedJobId) {
         pendingJobId.value = null;
+        currentJobStatus.value = null;
         backtestStore.clearCurrentAbortController();
       }
     }
     else if (message.type === 'job_updated' && 
              (message.payload?.name === JOB_TYPES_FRONTEND.FETCH_CANDLES_AND_RUN_BACKTEST ||
               message.payload?.name === JOB_TYPES_FRONTEND.FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST)) {
-        if(message.payload.jobId === pendingJobId.value && message.payload.status === 'active'){
+        
+        // Отслеживаем статус наших задач
+        if (message.payload.jobId === pendingJobId.value) {
+          currentJobStatus.value = message.payload.status;
+          
+          if (message.payload.status === 'active') {
             const isPortfolio = message.payload.name === JOB_TYPES_FRONTEND.FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST;
             safeToast({ 
                 severity: 'info', 
@@ -772,6 +801,17 @@ const handleWebSocketMessage = (event: MessageEvent) => {
                   : `Задача на бектест для ${message.payload.data?.symbol} (${message.payload.data?.timeframe}) начала выполняться.`, 
                 life: 3000 
             });
+          } else if (message.payload.status === 'waiting' || message.payload.status === 'wait') {
+            const isPortfolio = message.payload.name === JOB_TYPES_FRONTEND.FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST;
+            safeToast({ 
+                severity: 'info', 
+                summary: 'Задача в очереди', 
+                detail: isPortfolio 
+                  ? `Портфельный бектест поставлен в очередь и ожидает обработки.`
+                  : `Бектест для ${message.payload.data?.symbol} (${message.payload.data?.timeframe}) в очереди.`, 
+                life: 3000 
+            });
+          }
         }
     }
   } catch (e) {
@@ -836,7 +876,8 @@ onMounted(async () => {
   if (savedModeRaw) {
     try {
       const savedMode = JSON.parse(savedModeRaw);
-      backtestStore.isPortfolioMode = savedMode.isPortfolioMode || false;
+      // ИСПРАВЛЕНИЕ: Используем безопасную функцию восстановления режима
+      backtestStore.restorePortfolioMode(savedMode.isPortfolioMode || false);
       logger.info(`[BacktesterView] Restored backtester mode: ${backtestStore.isPortfolioMode ? 'portfolio' : 'single'}`);
     } catch (e) {
       logger.error('[BacktesterView] Failed to parse backtester mode:', e);
@@ -883,7 +924,11 @@ onMounted(async () => {
     try {
       const savedResults = JSON.parse(savedResultsRaw);
       backtestStore.results = savedResults as BacktestResult;
-      logger.info('[BacktesterView] Loaded last backtest results from localStorage.');
+      logger.info('[BacktesterView] Loaded last backtest results from localStorage:', {
+        hasTrades: savedResults.trades?.length || 0,
+        hasMetrics: !!savedResults.metrics,
+        totalPnl: savedResults.metrics?.totalPnl
+      });
     } catch (e) {
       logger.error('[BacktesterView] Failed to parse backtest results from localStorage:', e);
       localStorage.removeItem(BACKTESTER_RESULTS_KEY);
@@ -895,7 +940,11 @@ onMounted(async () => {
     try {
       const savedPortfolioResults = JSON.parse(savedPortfolioResultsRaw);
       backtestStore.portfolioResults = savedPortfolioResults as PortfolioBacktestResult;
-      logger.info('[BacktesterView] Loaded last portfolio results from localStorage.');
+      logger.info('[BacktesterView] Loaded last portfolio results from localStorage:', {
+        hasTradesByPair: !!savedPortfolioResults.tradesByPair,
+        pairsCount: Object.keys(savedPortfolioResults.tradesByPair || {}).length,
+        hasPortfolioMetrics: !!savedPortfolioResults.portfolioMetrics
+      });
     } catch (e) {
       logger.error('[BacktesterView] Failed to parse portfolio results from localStorage:', e);
       localStorage.removeItem(PORTFOLIO_RESULTS_KEY);
@@ -905,11 +954,39 @@ onMounted(async () => {
   connectWebSocket();
   
   // Восстановление состояния активного сканирования (после подключения WebSocket)
-  setTimeout(async () => {
-    if (isComponentMounted.value) {
-      await restoreActiveJobState();
+  // Увеличиваем timeout и добавляем retry логику
+  let retryCount = 0;
+  const maxRetries = 3;
+  
+  const tryRestoreActiveJobState = async () => {
+    try {
+      logger.info(`[BacktesterView] Attempting to restore active job state (attempt ${retryCount + 1}/${maxRetries})`);
+      
+      if (isComponentMounted.value) {
+        await restoreActiveJobState();
+        logger.info('[BacktesterView] Active job state restoration completed successfully');
+      }
+    } catch (error) {
+      logger.error(`[BacktesterView] Error restoring active job state (attempt ${retryCount + 1}):`, error);
+      
+      retryCount++;
+      if (retryCount < maxRetries) {
+        logger.info(`[BacktesterView] Retrying restore in 2 seconds...`);
+        setTimeout(tryRestoreActiveJobState, 2000);
+      } else {
+        logger.error('[BacktesterView] Max retries reached for restoring active job state');
+        safeToast({
+          severity: 'warning',
+          summary: 'Предупреждение',
+          detail: 'Не удалось восстановить состояние активных задач. Проверьте подключение к серверу.',
+          life: 5000
+        });
+      }
     }
-  }, 1000); // Небольшая задержка для установки WebSocket соединения
+  };
+
+  // Увеличиваем задержку до 2 секунд для более надёжного подключения WebSocket
+  setTimeout(tryRestoreActiveJobState, 2000);
 });
 
 onUnmounted(() => {
@@ -947,6 +1024,28 @@ const startSingleBacktest = async () => {
   if (!pairSymbol.value || !timeframe.value || !startDate.value || !endDate.value || initialCapital.value === null || initialCapital.value <= 0) {
     safeToast({ severity: 'error', summary: 'Ошибка', detail: 'Не все параметры для запуска бектеста заполнены корректно!', life: 4000 });
     return;
+  }
+
+  // Проверка логики дат для обычного бектеста
+  if (startDate.value >= endDate.value) {
+    safeToast({ 
+      severity: 'error', 
+      summary: 'Ошибка валидации', 
+      detail: 'Дата начала должна быть раньше даты окончания!', 
+      life: 4000 
+    });
+    return;
+  }
+
+  // Проверка слишком далекого будущего для обычного бектеста  
+  const now = new Date();
+  if (endDate.value > now) {
+    safeToast({ 
+      severity: 'warn', 
+      summary: 'Предупреждение', 
+      detail: 'Дата окончания в будущем. Для данной пары могут отсутствовать данные.', 
+      life: 5000 
+    });
   }
 
   const runParams: BacktestRunParameters = {
@@ -1338,84 +1437,184 @@ const saveActiveJobState = (jobId: string | null, jobType: 'single' | 'portfolio
 };
 
 const restoreActiveJobState = async () => {
+  logger.info('[BacktesterView] Starting restoreActiveJobState...');
+  
   const savedJobStateRaw = localStorage.getItem(ACTIVE_JOB_KEY);
-  if (savedJobStateRaw) {
+  if (!savedJobStateRaw) {
+    logger.info('[BacktesterView] No active job state found in localStorage');
+    
+    // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Проверяем активные задачи на сервере
     try {
-      const savedJobState = JSON.parse(savedJobStateRaw);
-      const { jobId, jobType, timestamp } = savedJobState;
+      logger.info('[BacktesterView] Checking for active jobs on server...');
+      const { getJobs } = await import('@/services/apiService');
+      const activeJobs = await getJobs({ status: ['active', 'waiting', 'wait'] });
       
-      // Проверяем, что задача не слишком старая (максимум 24 часа)
-      const maxAge = 24 * 60 * 60 * 1000; // 24 часа
-      if (Date.now() - timestamp > maxAge) {
-        logger.info('[BacktesterView] Active job state too old, clearing');
-        localStorage.removeItem(ACTIVE_JOB_KEY);
-        return;
-      }
-      
-      // Проверяем реальный статус задачи на сервере
-      try {
-        const { getJobDetails } = await import('@/services/apiService');
-        const jobDetails = await getJobDetails(jobId);
+      if (activeJobs && activeJobs.length > 0) {
+        // Ищем задачи связанные с бэктестом
+        const backtestJobs = activeJobs.filter(job => 
+          job.name === 'FETCH_CANDLES_AND_RUN_BACKTEST' || 
+          job.name === 'FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST'
+        );
         
-        // Проверяем, что задача все еще активна или ожидает выполнения
-        if (jobDetails.status === 'active' || jobDetails.status === 'waiting' || jobDetails.status === 'wait') {
-          pendingJobId.value = jobId;
+        if (backtestJobs.length > 0) {
+          const job = backtestJobs[0]; // Берем первую найденную задачу
+          const jobType = job.name === 'FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST' ? 'portfolio' : 'single';
+          
+          logger.info(`[BacktesterView] Found active backtest job on server: ${job.id} (${jobType})`);
+          
+          // Восстанавливаем состояние активной задачи
+          pendingJobId.value = job.id;
+          currentJobStatus.value = job.status;
           backtestStore.isLoading = true;
           
-          // Показываем уведомление о восстановлении состояния
+          // Сохраняем найденную задачу в localStorage для будущих восстановлений
+          saveActiveJobState(job.id, jobType);
+          
           safeToast({
             severity: 'info',
             summary: 'Восстановление состояния',
-            detail: `Обнаружено активное сканирование (${jobType === 'portfolio' ? 'портфельный' : 'обычный'} бектест). Статус: ${jobDetails.status}. ID: ${jobId}`,
+            detail: `Обнаружена активная задача ${jobType === 'portfolio' ? 'портфельного' : 'обычного'} бектеста. ID: ${job.id}`,
             life: 5000
           });
           
-          logger.info(`[BacktesterView] Restored active job state: ${jobId} (${jobType}) with status: ${jobDetails.status}`);
-        } else if (jobDetails.status === 'completed') {
-          // Задача завершена, но результаты не были получены
-          logger.info(`[BacktesterView] Job ${jobId} completed but results not received, clearing state`);
-          safeToast({
-            severity: 'warning',
-            summary: 'Задача завершена',
-            detail: `${jobType === 'portfolio' ? 'Портфельный' : 'Обычный'} бектест завершился во время отключения. Проверьте результаты.`,
-            life: 7000
-          });
-          localStorage.removeItem(ACTIVE_JOB_KEY);
-        } else if (jobDetails.status === 'failed') {
-          // Задача провалилась
-          logger.info(`[BacktesterView] Job ${jobId} failed, clearing state`);
-          safeToast({
-            severity: 'error',
-            summary: 'Задача провалилась',
-            detail: `${jobType === 'portfolio' ? 'Портфельный' : 'Обычный'} бектест завершился с ошибкой во время отключения.`,
-            life: 7000
-          });
-          localStorage.removeItem(ACTIVE_JOB_KEY);
-        } else {
-          // Неизвестный статус
-          logger.info(`[BacktesterView] Job ${jobId} has unexpected status: ${jobDetails.status}, clearing state`);
-          localStorage.removeItem(ACTIVE_JOB_KEY);
+          logger.info(`[BacktesterView] Successfully restored active job from server: ${job.id}`);
+          return;
         }
-      } catch (jobCheckError) {
-        // Если не можем получить статус задачи (возможно, она была удалена)
-        logger.warn(`[BacktesterView] Could not check job ${jobId} status:`, jobCheckError);
+      }
+      
+      logger.info('[BacktesterView] No active backtest jobs found on server');
+    } catch (serverCheckError) {
+      logger.warn('[BacktesterView] Failed to check active jobs on server:', serverCheckError);
+    }
+    
+    return;
+  }
+
+  try {
+    const savedJobState = JSON.parse(savedJobStateRaw);
+    const { jobId, jobType, timestamp } = savedJobState;
+    
+    logger.info(`[BacktesterView] Found saved job state:`, { jobId, jobType, timestamp });
+    
+    if (!jobId || !jobType) {
+      logger.warn('[BacktesterView] Invalid job state data, clearing');
+      localStorage.removeItem(ACTIVE_JOB_KEY);
+      return;
+    }
+    
+    // Проверяем, что задача не слишком старая (максимум 24 часа)
+    const maxAge = 24 * 60 * 60 * 1000; // 24 часа
+    if (Date.now() - timestamp > maxAge) {
+      logger.info('[BacktesterView] Active job state too old, clearing job state only');
+      localStorage.removeItem(ACTIVE_JOB_KEY);
+      return;
+    }
+    
+    // Проверяем реальный статус задачи на сервере
+    try {
+      logger.info(`[BacktesterView] Checking job status for jobId: ${jobId}`);
+      const { getJobDetails } = await import('@/services/apiService');
+      const jobDetails = await getJobDetails(jobId);
+      
+      logger.info(`[BacktesterView] Received job details:`, jobDetails);
+      
+      // Восстанавливаем ТОЛЬКО если задача все еще активна или ожидает выполнения
+      if (jobDetails.status === 'active' || jobDetails.status === 'waiting' || jobDetails.status === 'wait') {
+        logger.info(`[BacktesterView] Restoring active job: ${jobId} with status: ${jobDetails.status}`);
+        
+        pendingJobId.value = jobId;
+        currentJobStatus.value = jobDetails.status;
+        backtestStore.isLoading = true;
+        
+        // Показываем уведомление о восстановлении состояния
         safeToast({
-          severity: 'warning',
-          summary: 'Задача не найдена',
-          detail: `Не удалось проверить статус ${jobType === 'portfolio' ? 'портфельного' : 'обычного'} бектеста. Возможно, задача была удалена.`,
+          severity: 'info',
+          summary: 'Восстановление состояния',
+          detail: `Обнаружен активный ${jobType === 'portfolio' ? 'портфельный' : 'обычный'} бектест. Статус: ${getJobStatusText(jobDetails.status)}. ID: ${jobId}`,
           life: 5000
         });
+        
+        logger.info(`[BacktesterView] Successfully restored active job state: ${jobId} (${jobType}) with status: ${jobDetails.status}`);
+      } else if (jobDetails.status === 'completed') {
+        // Задача завершена - просто очищаем состояние активной задачи, НО результаты оставляем!
+        logger.info(`[BacktesterView] Job ${jobId} completed, results should be available`);
+        safeToast({
+          severity: 'success',
+          summary: 'Задача завершена',
+          detail: `${jobType === 'portfolio' ? 'Портфельный' : 'Обычный'} бектест завершен. Результаты доступны.`,
+          life: 5000
+        });
+        // Очищаем только состояние активной задачи, но НЕ трогаем результаты!
+        localStorage.removeItem(ACTIVE_JOB_KEY);
+      } else if (jobDetails.status === 'failed') {
+        // Задача провалилась - очищаем состояние и показываем ошибку
+        logger.info(`[BacktesterView] Job ${jobId} failed, clearing active job state`);
+        safeToast({
+          severity: 'error',
+          summary: 'Задача провалилась',
+          detail: `${jobType === 'portfolio' ? 'Портфельный' : 'Обычный'} бектест завершился с ошибкой.`,
+          life: 7000
+        });
+        // Очищаем только состояние активной задачи
+        localStorage.removeItem(ACTIVE_JOB_KEY);
+      } else {
+        // Неизвестный статус - очищаем состояние активной задачи
+        logger.info(`[BacktesterView] Job ${jobId} has status: ${jobDetails.status}, clearing active job state`);
         localStorage.removeItem(ACTIVE_JOB_KEY);
       }
-    } catch (e) {
-      logger.error('[BacktesterView] Failed to parse active job state:', e);
+    } catch (jobCheckError: any) {
+      // Если не можем получить статус задачи (возможно, она была удалена)
+      logger.warn(`[BacktesterView] Could not check job ${jobId} status:`, jobCheckError);
+      
+      // Проверяем тип ошибки
+      if (jobCheckError.response?.status === 404) {
+        logger.info(`[BacktesterView] Job ${jobId} not found (404), clearing state`);
+        safeToast({
+          severity: 'info',
+          summary: 'Задача не найдена',
+          detail: `Задача ${jobId} не найдена на сервере. Возможно, она была завершена или удалена.`,
+          life: 5000
+        });
+      } else {
+        logger.error(`[BacktesterView] API error checking job status:`, jobCheckError);
+        safeToast({
+          severity: 'warning',
+          summary: 'Ошибка подключения',
+          detail: `Не удалось проверить статус задачи. Результаты сохранены локально.`,
+          life: 5000
+        });
+        
+        // При ошибке API все равно пытаемся восстановить состояние загрузки
+        // если задача была недавно сохранена (менее 10 минут назад)
+        const recentJobAge = 10 * 60 * 1000; // 10 минут
+        if (Date.now() - timestamp < recentJobAge) {
+          logger.info(`[BacktesterView] Recent job (${jobId}), attempting to restore loading state`);
+          pendingJobId.value = jobId;
+          currentJobStatus.value = 'unknown';
+          backtestStore.isLoading = true;
+          
+          safeToast({
+            severity: 'info',
+            summary: 'Восстановление состояния',
+            detail: `Восстановлено состояние недавней задачи ${jobId}. Статус будет обновлен при подключении.`,
+            life: 5000
+          });
+        }
+      }
+      
+      // Очищаем только состояние активной задачи, результаты оставляем
       localStorage.removeItem(ACTIVE_JOB_KEY);
     }
+  } catch (e) {
+    logger.error('[BacktesterView] Failed to parse active job state:', e);
+    localStorage.removeItem(ACTIVE_JOB_KEY);
+    throw e; // Пробрасываем ошибку для retry логики
   }
 };
 
 const clearActiveJobState = () => {
   pendingJobId.value = null;
+  currentJobStatus.value = null;
   saveActiveJobState(null, 'single');
 };
 
@@ -1544,6 +1743,54 @@ const onTradeChartClose = () => {
   showTradeChart.value = false;
   selectedTrade.value = null;
   tradeCandleData.value = null;
+};
+
+// Функция для получения читаемого текста статуса
+const getJobStatusText = (status: string): string => {
+  const statusMap: Record<string, string> = {
+    'waiting': 'Ожидает в очереди',
+    'wait': 'Ожидает в очереди', 
+    'active': 'Выполняется',
+    'completed': 'Завершена',
+    'failed': 'Ошибка',
+    'delayed': 'Отложена',
+    'paused': 'Приостановлена'
+  };
+  return statusMap[status] || status;
+};
+
+const manualCheckActiveJobs = async () => {
+  try {
+    logger.info('[BacktesterView] Checking for active jobs on server...');
+    const { getJobs } = await import('@/services/apiService');
+    const activeJobs = await getJobs({ status: ['active', 'waiting', 'wait'] });
+    
+    if (activeJobs && activeJobs.length > 0) {
+      logger.info('[BacktesterView] Active jobs found on server:', activeJobs);
+      safeToast({
+        severity: 'success',
+        summary: 'Активные задачи найдены',
+        detail: `На сервере найдены активные задачи: ${activeJobs.map(job => job.name).join(', ')}`,
+        life: 5000
+      });
+    } else {
+      logger.info('[BacktesterView] No active jobs found on server');
+      safeToast({
+        severity: 'info',
+        summary: 'Активные задачи не найдены',
+        detail: 'На сервере не найдено активных задач.',
+        life: 5000
+      });
+    }
+  } catch (error) {
+    logger.error('[BacktesterView] Error checking active jobs:', error);
+    safeToast({
+      severity: 'error',
+      summary: 'Ошибка проверки активных задач',
+      detail: 'Не удалось получить информацию о активных задачах на сервере.',
+      life: 7000
+    });
+  }
 };
 
 </script>

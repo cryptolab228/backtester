@@ -43,7 +43,7 @@ export class DataService {
    */
   async saveCandles(symbol: string, timeframe: string, candles: CandleData[]): Promise<void> {
     if (!candles || candles.length === 0) {
-      // logger.debug(`No candles provided to save for ${symbol} (${timeframe}).`);
+      logger.debug(`No candles provided to save for ${symbol} (${timeframe}).`);
       return;
     }
 
@@ -51,13 +51,16 @@ export class DataService {
 
     try {
       // Находим ID пары по символу
+      logger.debug(`[DataService] Looking up trading pair for symbol: ${symbol}`);
       const tradingPair = await this.pairRepository.findOne({ where: { symbol } });
       if (!tradingPair) {
         logger.error(`Trading pair with symbol ${symbol} not found. Cannot save candles.`);
         return;
       }
+      logger.debug(`[DataService] Found trading pair ID ${tradingPair.id} for symbol ${symbol}`);
 
       // Подготавливаем данные для вставки
+      logger.debug(`[DataService] Preparing ${candles.length} candle entities for ${symbol} (${timeframe})`);
       const candleEntities = candles.map(c => ({
         tradingPair: tradingPair, // Связываем с найденной парой
         timestamp: c.timestamp,
@@ -70,27 +73,52 @@ export class DataService {
         volumeQuote: c.volumeQuote,
       }));
 
-      // Определяем размер чанка
-      const chunkSize = 1000; // Можно настроить
+      // Определяем размер чанка - уменьшаем для стабильности
+      const chunkSize = 500; // Уменьшено с 1000 для стабильности
+      const totalChunks = Math.ceil(candleEntities.length / chunkSize);
+      logger.debug(`[DataService] Will process ${totalChunks} chunks of max ${chunkSize} candles each`);
+      
       for (let i = 0; i < candleEntities.length; i += chunkSize) {
+        const chunkIndex = i / chunkSize + 1;
         const chunk = candleEntities.slice(i, i + chunkSize);
-        logger.debug(`Processing chunk ${i / chunkSize + 1}: ${chunk.length} candles for ${symbol} (${timeframe})`);
+        logger.debug(`[DataService] Processing chunk ${chunkIndex}/${totalChunks}: ${chunk.length} candles for ${symbol} (${timeframe})`);
         
-        // Используем insert и onConflict для игнорирования дубликатов
-        // Это эффективнее для больших объемов данных, чем upsert или find/save
-        await this.candleRepository
-          .createQueryBuilder()
-          .insert()
-          .into(Candle)
-          .values(chunk) // Вставляем чанк
-          .onConflict(`("pair_id", "timestamp", "timeframe") DO NOTHING`) // Игнорировать при конфликте уникального индекса
-          .execute();
+        try {
+          // Добавляем таймаут для предотвращения зависания
+          const insertPromise = this.candleRepository
+            .createQueryBuilder()
+            .insert()
+            .into(Candle)
+            .values(chunk) // Вставляем чанк
+            .onConflict(`("pair_id", "timestamp", "timeframe") DO NOTHING`) // Игнорировать при конфликте уникального индекса
+            .execute();
+
+          // Устанавливаем таймаут 30 секунд на операцию
+          const result = await Promise.race([
+            insertPromise,
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error(`Database insert timeout for chunk ${chunkIndex}`)), 30000)
+            )
+          ]);
+
+          logger.debug(`[DataService] Successfully processed chunk ${chunkIndex}/${totalChunks} for ${symbol} (${timeframe})`);
+        } catch (chunkError: any) {
+          logger.error(`[DataService] Error processing chunk ${chunkIndex}/${totalChunks} for ${symbol} (${timeframe}): ${chunkError.message}`);
+          // Не прерываем весь процесс из-за одного чанка, продолжаем с остальными
+          continue;
+        }
       }
 
       logger.info(`Successfully processed ${candles.length} candles for ${symbol} (${timeframe}). Duplicates (if any) were ignored.`);
 
-    } catch (error) {
-      logger.error(`Error saving candles for ${symbol} (${timeframe}):`, error);
+    } catch (error: any) {
+      logger.error(`Error saving candles for ${symbol} (${timeframe}): ${error.message}`, { 
+        stack: error.stack,
+        symbol,
+        timeframe,
+        candleCount: candles.length 
+      });
+      throw error; // Перебрасываем ошибку наверх для обработки в воркере
     }
   }
 

@@ -8,9 +8,7 @@ import ConfirmationService from 'primevue/confirmationservice'; // <--- Доба
 import Tooltip from 'primevue/tooltip'; // <--- Импортировать Tooltip
 import Aura from '@primevue/themes/aura'; // Импортируем тему Aura
 
-// CSS импорты
-import 'primevue/resources/themes/lara-light-blue/theme.css'; // PrimeVue тема
-import 'primevue/resources/primevue.min.css';               // PrimeVue основные стили
+// CSS импорты (только актуальные для PrimeVue 4.x)
 import 'primeicons/primeicons.css';                         // Иконки
 import './style.css'; // Основные стили (с Tailwind)
 
