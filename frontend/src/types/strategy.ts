@@ -79,6 +79,12 @@ export interface Trade {
   duration?: number; // in milliseconds or seconds
   profitPercentage?: number;
   riskRewardRatio?: number;
+  // Chart-related properties for timeframe switching
+  backtestTimeframe?: string; // Original timeframe used in backtest
+  backtestTimeRange?: {
+    startTime: number;
+    endTime: number;
+  };
 }
 
 export interface BacktestMetrics {
@@ -184,4 +190,16 @@ export interface PortfolioBacktestResult {
   jobId?: string;
   status?: 'queued' | 'running' | 'completed' | 'failed';
   message?: string;
+  
+  // Large file support
+  _largeDataSavedToFile?: boolean;
+  _downloadUrl?: string;
+  _fullDataSize?: string;
+  _previewNote?: string;
+  
+  // Data reduction support
+  _dataReduced?: boolean;
+  _originalTradesCount?: number;
+  _reducedTradesCount?: number;
+  _note?: string;
 } 

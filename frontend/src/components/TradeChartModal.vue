@@ -76,8 +76,23 @@
       <!-- TradingView График -->
       <div class="bg-white rounded-lg border border-gray-200">
         <div class="flex items-center justify-between p-4 border-b border-gray-200">
-          <h4 class="text-lg font-semibold text-gray-900">График сделки (Полный диапазон)</h4>
+          <h4 class="text-lg font-semibold text-gray-900">
+            График торговой пары
+            <span v-if="isBacktestTimeframe" class="text-sm text-green-600 font-normal ml-2">(Таймфрейм бектеста)</span>
+            <span v-else class="text-sm text-orange-600 font-normal ml-2">(Альтернативный таймфрейм)</span>
+          </h4>
           <div class="flex items-center space-x-2">
+            <!-- Выбор таймфрейма -->
+            <Dropdown
+              v-model="selectedTimeframe"
+              :options="availableTimeframes"
+              option-label="label"
+              option-value="value"
+              placeholder="Таймфрейм"
+              class="timeframe-dropdown"
+              @change="onTimeframeChange"
+            />
+            
             <Button 
               v-if="chartInstance" 
               icon="pi pi-download" 
@@ -90,6 +105,13 @@
               class="p-button-text p-button-sm" 
               @click="refreshChart"
               v-tooltip.bottom="'Обновить график'"
+            />
+            <Button 
+              icon="pi pi-cloud-download" 
+              class="p-button-text p-button-sm p-button-info" 
+              @click="fetchCurrentTimeframeData"
+              v-tooltip.bottom="'Загрузить данные для текущего таймфрейма'"
+              :loading="isLoadingData"
             />
             <Dropdown
               v-model="selectedChartType"
@@ -114,7 +136,45 @@
           <div v-else class="text-center py-12">
             <i class="pi pi-chart-line text-6xl text-gray-300 mb-4"></i>
             <h4 class="text-lg text-gray-500 mb-2">График сделки</h4>
-            <p class="text-gray-400">Данные графика недоступны для этой сделки</p>
+            <p class="text-gray-400 mb-4">
+              Данные для таймфрейма {{ selectedTimeframe }} недоступны
+              <span v-if="!isBacktestTimeframe" class="block text-sm mt-1">
+                (Таймфрейм бектеста: {{ backtestTimeframe }})
+              </span>
+            </p>
+            
+            <!-- Блок с действиями при отсутствии данных -->
+            <div class="flex flex-col items-center space-y-3">
+              <div class="flex space-x-2">
+                <Button 
+                  :label="`Загрузить данные ${selectedTimeframe}`" 
+                  icon="pi pi-cloud-download" 
+                  class="p-button-sm p-button-outlined" 
+                  @click="fetchCurrentTimeframeData"
+                  :loading="isLoadingData"
+                />
+                <Button 
+                  v-if="!isBacktestTimeframe"
+                  :label="`Переключиться на ${backtestTimeframe}`" 
+                  icon="pi pi-sync" 
+                  class="p-button-sm p-button-info" 
+                  @click="switchToBacktestTimeframe"
+                />
+              </div>
+              
+              <!-- Быстрые кнопки для популярных таймфреймов -->
+              <div class="flex space-x-2 mt-3 quick-timeframe-buttons">
+                <span class="text-xs text-gray-500 self-center">Быстрый доступ:</span>
+                <Button 
+                  v-for="tf in ['5m', '15m', '1h', '4h']" 
+                  :key="tf"
+                  :label="tf" 
+                  class="p-button-sm p-button-text" 
+                  @click="switchToTimeframe(tf)"
+                  :class="{ 'p-button-secondary': tf === selectedTimeframe }"
+                />
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -182,14 +242,18 @@ import Button from 'primevue/button';
 import ProgressSpinner from 'primevue/progressspinner';
 import Dropdown from 'primevue/dropdown';
 import type { Trade } from '@/types/strategy';
+import { useToast } from 'primevue/usetoast';
 
 interface CandleData {
-  timestamp: number;
+  timestamp?: number;
+  openTime?: number; // Alternative timestamp field from API
+  time?: number; // Another alternative timestamp field
   open: number;
   high: number;
   low: number;
   close: number;
   volume?: number;
+  vol?: number; // Alternative volume field from API
 }
 
 interface Props {
@@ -203,7 +267,10 @@ const props = defineProps<Props>();
 const emit = defineEmits<{
   'update:visible': [value: boolean];
   'close': [];
+  'retry-load': [];
 }>();
+
+const toast = useToast();
 
 // TradingView Chart refs
 const chartContainer = ref<HTMLElement | null>(null);
@@ -214,6 +281,7 @@ const stopLossLineSeries = ref<ISeriesApi<'Line'> | null>(null);
 const takeProfitLineSeries = ref<ISeriesApi<'Line'> | null>(null);
 const seriesMarkersInstance = ref<any | null>(null);
 const isLoadingChart = ref(false);
+const isLoadingData = ref(false);
 const lightweightChartsVersion = ref('5.x');
 
 // Chart type selection
@@ -224,6 +292,26 @@ const chartTypeOptions = [
   { label: 'Область', value: 'area' }
 ];
 
+// Выбор таймфрейма
+const selectedTimeframe = ref<string>('1h');
+const availableTimeframes = [
+  { label: '1 минута', value: '1m' },
+  { label: '3 минуты', value: '3m' },
+  { label: '5 минут', value: '5m' },
+  { label: '15 минут', value: '15m' },
+  { label: '30 минут', value: '30m' },
+  { label: '1 час', value: '1h' },
+  { label: '2 часа', value: '2h' },
+  { label: '4 часа', value: '4h' },
+  { label: '6 часов', value: '6h' },
+  { label: '12 часов', value: '12h' },
+  { label: '1 день', value: '1d' }
+];
+
+// Внутренние данные свечей для текущего таймфрейма
+const currentCandleData = ref<CandleData[] | null>(null);
+const currentTimeframe = ref<string>('1h');
+
 const isVisible = computed({
   get: () => props.visible,
   set: (value) => emit('update:visible', value)
@@ -231,11 +319,22 @@ const isVisible = computed({
 
 const dialogTitle = computed(() => {
   if (!props.trade) return 'График сделки';
-  return `График: ${props.trade.pair || 'Unknown'} - ${props.trade.direction?.toUpperCase()} - ${formatDate(props.trade.entryTimestamp)}`;
+  const backtestTf = props.trade.backtestTimeframe || 'Unknown';
+  const currentTf = currentTimeframe.value;
+  const timeframeInfo = currentTf === backtestTf ? `${currentTf} (Бектест)` : `${currentTf}`;
+  return `График: ${props.trade.pair || 'Unknown'} - ${props.trade.direction?.toUpperCase()} - ${timeframeInfo}`;
 });
 
 const hasChartData = computed(() => {
-  return props.candleData && props.candleData.length > 0;
+  return currentCandleData.value && currentCandleData.value.length > 0;
+});
+
+const backtestTimeframe = computed(() => {
+  return props.trade?.backtestTimeframe || '1h';
+});
+
+const isBacktestTimeframe = computed(() => {
+  return currentTimeframe.value === backtestTimeframe.value;
 });
 
 const riskRewardRatio = computed(() => {
@@ -265,66 +364,219 @@ const createTradingViewChart = async () => {
   isLoadingChart.value = true;
   
   try {
-    console.log(`[TradeChart] Starting chart creation with ${props.candleData!.length} original candles`);
+    console.log(`[TradeChart] Starting chart creation with ${currentCandleData.value!.length} original candles for timeframe ${currentTimeframe.value}`);
 
-    // КАРДИНАЛЬНАЯ ОЧИСТКА ДАННЫХ ОТ ДУБЛИКАТОВ
-    const rawCandles = props.candleData!;
+    // УЛУЧШЕННАЯ ОЧИСТКА ДАННЫХ с правильной обработкой разных форматов API
+    const rawCandles = currentCandleData.value!;
     const cleanedCandles: any[] = [];
     const usedTimestamps = new Set<number>();
 
-    // Проходим по данным и удаляем дубликаты
-    rawCandles.forEach((candle, index) => {
-      const timestamp = Math.floor(candle.timestamp / 1000);
+    console.log(`[TradeChart] Processing ${rawCandles.length} raw candles. Sample data:`, rawCandles[0]);
+
+    // НОРМАЛИЗАЦИЯ ДАННЫХ: Приводим все форматы к единому
+    const normalizedCandles = rawCandles.map((candle, index) => {
+      // ИСПРАВЛЕННАЯ логика определения timestamp из разных возможных полей
+      let timestamp: number = 0;
       
-      if (!usedTimestamps.has(timestamp)) {
-        usedTimestamps.add(timestamp);
+      // Пробуем timestamp
+      if (candle.timestamp) {
+        timestamp = typeof candle.timestamp === 'string' ? parseInt(candle.timestamp, 10) : candle.timestamp;
+      }
+      // Пробуем openTime (основной формат от бэкенда)
+      else if (candle.openTime) {
+        timestamp = typeof candle.openTime === 'string' ? parseInt(candle.openTime, 10) : candle.openTime;
+      }
+      // Пробуем time (альтернативный формат)
+      else if (candle.time) {
+        timestamp = typeof candle.time === 'string' ? parseInt(candle.time, 10) : candle.time;
+      }
+      
+      if (typeof timestamp !== 'number' || timestamp <= 0) {
+        console.warn(`[TradeChart] Invalid or missing timestamp for candle ${index}:`, candle);
+        return null;
+      }
+      
+      // Конвертируем в миллисекунды если нужно
+      if (timestamp < 10000000000) { // Если меньше 10^10, то это секунды
+        timestamp = timestamp * 1000;
+      }
+      
+      // Проверяем что timestamp в разумных пределах (не в далёком прошлом или будущем)
+      const now = Date.now();
+      const earliestDate = new Date('2020-01-01').getTime();
+      const latestDate = now + 365 * 24 * 60 * 60 * 1000; // Плюс год в будущем
+      
+      if (timestamp < earliestDate || timestamp > latestDate) {
+        console.warn(`[TradeChart] Timestamp out of reasonable range for candle ${index}:`, {
+          timestamp,
+          date: timestamp && timestamp > 0 ? new Date(timestamp).toISOString() : 'Invalid',
+          candle
+        });
+        return null;
+      }
+
+      // Извлекаем OHLC данные с правильной обработкой строк от бэкенда
+      const open = typeof candle.open === 'string' ? parseFloat(candle.open) : Number(candle.open);
+      const high = typeof candle.high === 'string' ? parseFloat(candle.high) : Number(candle.high);  
+      const low = typeof candle.low === 'string' ? parseFloat(candle.low) : Number(candle.low);
+      const close = typeof candle.close === 'string' ? parseFloat(candle.close) : Number(candle.close);
+      const volume = typeof candle.volume === 'string' ? parseFloat(candle.volume) : Number(candle.volume || candle.vol || 0);
+
+      // Базовая валидация OHLC
+      if (isNaN(open) || isNaN(high) || isNaN(low) || isNaN(close)) {
+        console.warn(`[TradeChart] Invalid OHLC values for candle ${index}:`, { open, high, low, close, candle });
+        return null;
+      }
+
+      if (open <= 0 || high <= 0 || low <= 0 || close <= 0) {
+        console.warn(`[TradeChart] Non-positive OHLC values for candle ${index}:`, { open, high, low, close });
+        return null;
+      }
+
+      if (high < low || high < Math.max(open, close) || low > Math.min(open, close)) {
+        console.warn(`[TradeChart] Invalid OHLC logic for candle ${index}:`, { open, high, low, close });
+        return null;
+      }
+
+      return {
+        timestamp,
+        open,
+        high, 
+        low,
+        close,
+        volume,
+        originalIndex: index
+      };
+    }).filter(candle => candle !== null); // Убираем null значения
+
+    console.log(`[TradeChart] Normalized ${normalizedCandles.length}/${rawCandles.length} candles`);
+
+    if (normalizedCandles.length === 0) {
+      throw new Error('No valid candles after normalization');
+    }
+
+    // Сортируем по времени
+    normalizedCandles.sort((a, b) => a.timestamp - b.timestamp);
+
+    // ОПРЕДЕЛЯЕМ ВРЕМЕННОЙ ИНТЕРВАЛ более умно
+    let timeInterval = 60; // Дефолт 1 минута (в секундах)
+    
+    if (normalizedCandles.length > 1) {
+      // Вычисляем интервалы между несколькими свечами для более точного определения
+      const intervals: number[] = [];
+      for (let i = 1; i < Math.min(normalizedCandles.length, 10); i++) {
+        const interval = (normalizedCandles[i].timestamp - normalizedCandles[i-1].timestamp) / 1000; // В секундах
+        if (interval > 0 && interval < 24 * 60 * 60) { // Разумный интервал (меньше суток)
+          intervals.push(interval);
+        }
+      }
+      
+      if (intervals.length > 0) {
+        // Используем медианный интервал для защиты от выбросов
+        intervals.sort((a, b) => a - b);
+        const medianInterval = intervals[Math.floor(intervals.length / 2)];
+        timeInterval = Math.round(medianInterval);
+        
+        console.log(`[TradeChart] Detected time intervals:`, intervals);
+        console.log(`[TradeChart] Using median interval: ${timeInterval} seconds`);
+      }
+    }
+
+    // НОРМАЛИЗАЦИЯ ВРЕМЕННЫХ МЕТОК и удаление дубликатов
+    normalizedCandles.forEach((candle, index) => {
+      const rawTimestamp = Math.floor(candle.timestamp / 1000); // Конвертируем в секунды
+      const normalizedTimestamp = Math.floor(rawTimestamp / timeInterval) * timeInterval;
+      
+      if (!usedTimestamps.has(normalizedTimestamp)) {
+        usedTimestamps.add(normalizedTimestamp);
+        
         cleanedCandles.push({
-          time: timestamp as Time,
-          open: Number(candle.open),
-          high: Number(candle.high),
-          low: Number(candle.low),
-          close: Number(candle.close),
-          volume: Number(candle.volume || 0),
-          originalTimestamp: candle.timestamp
+          time: normalizedTimestamp as Time,
+          open: candle.open,
+          high: candle.high,
+          low: candle.low,
+          close: candle.close,
+          volume: candle.volume,
+          originalTimestamp: candle.timestamp,
+          originalIndex: candle.originalIndex
         });
       } else {
-        console.warn(`[TradeChart] Skipping duplicate timestamp: ${timestamp} at index ${index}`);
+        console.debug(`[TradeChart] Skipping duplicate timestamp: ${normalizedTimestamp} (${normalizedTimestamp > 0 ? new Date(normalizedTimestamp * 1000).toISOString() : 'Invalid'}) at index ${index}`);
       }
     });
 
     // Сортируем по времени
     cleanedCandles.sort((a, b) => Number(a.time) - Number(b.time));
 
-    // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА - удаляем любые нарушения последовательности
+    // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА - заполняем пропуски в данных
     const finalCandles: any[] = [];
-    let lastTime = 0;
+    let expectedTime = 0;
 
     cleanedCandles.forEach((candle, index) => {
       const currentTime = Number(candle.time);
-      if (currentTime > lastTime) {
+      
+      if (index === 0) {
         finalCandles.push(candle);
-        lastTime = currentTime;
+        expectedTime = currentTime + timeInterval;
       } else {
-        console.warn(`[TradeChart] Removing candle with invalid time sequence: ${currentTime} <= ${lastTime} at index ${index}`);
+        // Если есть пропуск во времени больше одного интервала
+        const timeDiff = currentTime - expectedTime + timeInterval;
+        const missedIntervals = Math.floor(timeDiff / timeInterval);
+        
+        if (missedIntervals > 1 && missedIntervals <= 10) {
+          // Заполняем небольшие пропуски копированием последней свечи
+          const lastCandle = finalCandles[finalCandles.length - 1];
+          for (let i = 1; i < missedIntervals; i++) {
+            const fillTime = expectedTime + (i - 1) * timeInterval;
+            finalCandles.push({
+              time: fillTime as Time,
+              open: lastCandle.close,
+              high: lastCandle.close,
+              low: lastCandle.close,
+              close: lastCandle.close,
+              volume: 0,
+              filled: true
+            });
+          }
+        }
+        
+        finalCandles.push(candle);
+        expectedTime = currentTime + timeInterval;
       }
     });
 
-    console.log(`[TradeChart] Data cleaned: ${rawCandles.length} -> ${cleanedCandles.length} -> ${finalCandles.length} candles`);
+    console.log(`[TradeChart] Data processed: ${rawCandles.length} -> ${cleanedCandles.length} -> ${finalCandles.length} candles`);
+    console.log(`[TradeChart] Time range: ${finalCandles[0]?.time && finalCandles[0].time > 0 ? new Date(finalCandles[0].time * 1000).toISOString() : 'Invalid'} to ${finalCandles[finalCandles.length - 1]?.time && finalCandles[finalCandles.length - 1].time > 0 ? new Date(finalCandles[finalCandles.length - 1].time * 1000).toISOString() : 'Invalid'}`);
 
     if (finalCandles.length === 0) {
-      throw new Error('No valid candle data after cleaning');
+      throw new Error('No valid candle data after processing');
     }
 
-    // Подготавливаем данные для TradingView
+    // Определяем точность цен на основе данных
+    const allPrices = finalCandles.flatMap(c => [c.open, c.high, c.low, c.close]);
+    const maxPrice = Math.max(...allPrices);
+    const minPrice = Math.min(...allPrices);
+    const priceRange = maxPrice - minPrice;
+    
+    // Динамическая точность в зависимости от диапазона цен
+    let pricePrecision = 4;
+    if (priceRange > 100) pricePrecision = 2;
+    else if (priceRange > 10) pricePrecision = 3;
+    else if (priceRange > 1) pricePrecision = 4;
+    else pricePrecision = 6;
+    
+    console.log(`[TradeChart] Price range: ${minPrice.toFixed(pricePrecision)} - ${maxPrice.toFixed(pricePrecision)}, precision: ${pricePrecision}`);
+
+    // Подготавливаем данные для TradingView с правильной точностью
     const candleDataFormatted = finalCandles.map(candle => ({
       time: candle.time,
-      open: candle.open,
-      high: candle.high,
-      low: candle.low,
-      close: candle.close,
+      open: Number(candle.open.toFixed(pricePrecision)),
+      high: Number(candle.high.toFixed(pricePrecision)),
+      low: Number(candle.low.toFixed(pricePrecision)),
+      close: Number(candle.close.toFixed(pricePrecision)),
     }));
 
-    // Создаем TradingView chart
+    // Создаем TradingView chart с улучшенными настройками
     chartInstance.value = createChart(chartContainer.value, {
       width: chartContainer.value.clientWidth,
       height: 600,
@@ -355,11 +607,16 @@ const createTradingViewChart = async () => {
           top: 0.05,
           bottom: 0.15,
         },
+        // Устанавливаем точность цен
+        visible: true,
       },
       timeScale: {
         borderColor: '#cccccc',
         timeVisible: true,
-        secondsVisible: false,
+        secondsVisible: timeInterval < 60,
+        rightOffset: 10,
+        barSpacing: Math.max(6, Math.min(20, Math.floor(600 / finalCandles.length))),
+        minBarSpacing: 3,
       },
       handleScroll: {
         mouseWheel: true,
@@ -374,7 +631,7 @@ const createTradingViewChart = async () => {
       },
     });
 
-    // Создаем основную серию свечей
+    // Создаем основную серию свечей с правильными настройками цен
     let mainSeries: ISeriesApi<any>;
     
     if (selectedChartType.value === 'candlestick') {
@@ -385,6 +642,11 @@ const createTradingViewChart = async () => {
         borderUpColor: '#00C851',
         wickDownColor: '#ff4444',
         wickUpColor: '#00C851',
+        priceFormat: {
+          type: 'price',
+          precision: pricePrecision,
+          minMove: Math.pow(0.1, pricePrecision),
+        },
       });
       
       // БЕЗОПАСНАЯ УСТАНОВКА ДАННЫХ
@@ -399,6 +661,11 @@ const createTradingViewChart = async () => {
       mainSeries = chartInstance.value.addSeries(LineSeries, {
         color: '#2962FF',
         lineWidth: 2,
+        priceFormat: {
+          type: 'price',
+          precision: pricePrecision,
+          minMove: Math.pow(0.1, pricePrecision),
+        },
       });
       const lineData = candleDataFormatted.map(candle => ({
         time: candle.time,
@@ -411,6 +678,11 @@ const createTradingViewChart = async () => {
         bottomColor: 'rgba(41, 98, 255, 0.0)',
         lineColor: '#2962FF',
         lineWidth: 2,
+        priceFormat: {
+          type: 'price',
+          precision: pricePrecision,
+          minMove: Math.pow(0.1, pricePrecision),
+        },
       });
       const areaData = candleDataFormatted.map(candle => ({
         time: candle.time,
@@ -446,11 +718,11 @@ const createTradingViewChart = async () => {
       }
     }
 
-    // Добавляем линии Stop Loss и Take Profit
-    addTradeLevelsWithRiskReward(finalCandles);
+    // Добавляем линии Stop Loss и Take Profit с правильной точностью
+    addTradeLevelsWithRiskReward(finalCandles, pricePrecision);
 
-    // ПРАВИЛЬНЫЙ МЕТОД - стрелочки через createSeriesMarkers API v5
-    addTradeArrowsWithLines(finalCandles);
+    // Добавляем маркеры входа/выхода с правильной точностью
+    addTradeArrowsWithLines(finalCandles, pricePrecision);
 
     // Подгоняем масштаб для отображения полного диапазона
     chartInstance.value.timeScale().fitContent();
@@ -469,70 +741,117 @@ const createTradingViewChart = async () => {
 };
 
 // ПРАВИЛЬНЫЙ МЕТОД - стрелочки через createSeriesMarkers API v5
-const addTradeArrowsWithLines = (cleanedCandles: any[]) => {
+const addTradeArrowsWithLines = (cleanedCandles: any[], pricePrecision: number) => {
   if (!chartInstance.value || !props.trade || cleanedCandles.length === 0 || !candlestickSeries.value) return;
 
   try {
     console.log('[TradeChart] Adding trade arrows with createSeriesMarkers method');
+    console.log('[TradeChart] Trade details:', {
+      entryTimestamp: props.trade.entryTimestamp,
+      entryPrice: props.trade.entryPrice,
+      exitTimestamp: props.trade.exitTimestamp,
+      exitPrice: props.trade.exitPrice,
+      entryTime: props.trade.entryTimestamp && props.trade.entryTimestamp > 0 ? new Date(props.trade.entryTimestamp).toISOString() : 'Invalid',
+      exitTime: props.trade.exitTimestamp && props.trade.exitTimestamp > 0 ? new Date(props.trade.exitTimestamp).toISOString() : 'ongoing'
+    });
 
     const markers: any[] = [];
 
+    // ИСПРАВЛЕННАЯ ЛОГИКА: Ищем ближайшие свечи к времени входа/выхода
+    const findNearestCandleTime = (targetTimestamp: number): Time | null => {
+      if (!targetTimestamp || cleanedCandles.length === 0) return null;
+      
+      let nearestCandle = cleanedCandles[0];
+      let minDifference = Math.abs(targetTimestamp - (nearestCandle.time * 1000));
+      
+      for (const candle of cleanedCandles) {
+        const candleTimestamp = candle.time * 1000; // Конвертируем обратно в миллисекунды для сравнения
+        const difference = Math.abs(targetTimestamp - candleTimestamp);
+        
+        if (difference < minDifference) {
+          minDifference = difference;
+          nearestCandle = candle;
+        }
+      }
+      
+      console.log(`[TradeChart] Nearest candle for timestamp ${targetTimestamp && targetTimestamp > 0 ? new Date(targetTimestamp).toISOString() : 'Invalid'}:`, {
+        targetTime: targetTimestamp && targetTimestamp > 0 ? new Date(targetTimestamp).toISOString() : 'Invalid',
+        nearestCandleTime: nearestCandle?.time && nearestCandle.time > 0 ? new Date(nearestCandle.time * 1000).toISOString() : 'Invalid',
+        timeDifference: minDifference / 1000 / 60, // в минутах
+        nearestCandle
+      });
+      
+      return nearestCandle.time;
+    };
+
     // Стрелочка входа
     if (props.trade.entryTimestamp && props.trade.entryPrice) {
-      const entryTime = Math.floor(props.trade.entryTimestamp / 1000) as Time;
+      const entryTime = findNearestCandleTime(props.trade.entryTimestamp);
       
-      console.log(`[TradeChart] Adding entry marker at time ${entryTime}, price ${props.trade.entryPrice}`);
+      if (entryTime) {
+        console.log(`[TradeChart] Adding entry marker at time ${entryTime}, price ${props.trade.entryPrice}`);
 
-      markers.push({
-        time: entryTime,
-        position: 'belowBar',
-        color: props.trade.direction === 'long' ? '#00C851' : '#ff4444',
-        shape: 'arrowUp',
-        text: `ENTRY: $${props.trade.entryPrice.toFixed(4)}`,
-        size: 2,
-      });
+        markers.push({
+          time: entryTime,
+          position: 'belowBar',
+          color: props.trade.direction === 'long' ? '#00C851' : '#ff4444',
+          shape: 'arrowUp',
+          text: `ENTRY: $${props.trade.entryPrice.toFixed(pricePrecision)}`,
+          size: 2,
+        });
+      } else {
+        console.warn('[TradeChart] Could not find nearest candle for entry time');
+      }
     }
 
     // Стрелочка выхода
     if (props.trade.exitTimestamp && props.trade.exitPrice) {
-      const exitTime = Math.floor(props.trade.exitTimestamp / 1000) as Time;
+      const exitTime = findNearestCandleTime(props.trade.exitTimestamp);
       const pnlText = (props.trade.pnl || 0) >= 0 ? `+$${(props.trade.pnl || 0).toFixed(2)}` : `-$${Math.abs(props.trade.pnl || 0).toFixed(2)}`;
       
-      console.log(`[TradeChart] Adding exit marker at time ${exitTime}, price ${props.trade.exitPrice}`);
+      if (exitTime) {
+        console.log(`[TradeChart] Adding exit marker at time ${exitTime}, price ${props.trade.exitPrice}`);
 
-      markers.push({
-        time: exitTime,
-        position: 'aboveBar',
-        color: (props.trade.pnl || 0) >= 0 ? '#00C851' : '#ff4444',
-        shape: 'arrowDown',
-        text: `EXIT: $${props.trade.exitPrice.toFixed(4)} | ${pnlText}`,
-        size: 2,
-      });
+        markers.push({
+          time: exitTime,
+          position: 'aboveBar',
+          color: (props.trade.pnl || 0) >= 0 ? '#00C851' : '#ff4444',
+          shape: 'arrowDown',
+          text: `EXIT: $${props.trade.exitPrice.toFixed(pricePrecision)} | ${pnlText}`,
+          size: 2,
+        });
+      } else {
+        console.warn('[TradeChart] Could not find nearest candle for exit time');
+      }
     }
 
     // Используем правильный API для v5
     if (markers.length > 0) {
       try {
-        console.log(`[TradeChart] Creating series markers with ${markers.length} markers`);
+        console.log(`[TradeChart] Creating series markers with ${markers.length} markers:`, markers);
         seriesMarkersInstance.value = createSeriesMarkers(candlestickSeries.value, markers);
         console.log('[TradeChart] Series markers created successfully');
       } catch (markerError) {
         console.error('[TradeChart] Error creating series markers:', markerError);
         // Fallback к горизонтальным линиям если маркеры не работают
-        addTradeArrowsAsFallback(cleanedCandles);
+        addTradeArrowsAsFallback(cleanedCandles, pricePrecision);
       }
+    } else {
+      console.warn('[TradeChart] No markers to add');
+      // Используем fallback метод
+      addTradeArrowsAsFallback(cleanedCandles, pricePrecision);
     }
 
     console.log('[TradeChart] Trade arrows added successfully');
   } catch (error) {
     console.error('[TradeChart] Error adding trade arrows:', error);
     // Fallback к горизонтальным линиям
-    addTradeArrowsAsFallback(cleanedCandles);
+    addTradeArrowsAsFallback(cleanedCandles, pricePrecision);
   }
 };
 
 // Fallback метод с горизонтальными линиями
-const addTradeArrowsAsFallback = (cleanedCandles: any[]) => {
+const addTradeArrowsAsFallback = (cleanedCandles: any[], pricePrecision: number) => {
   if (!chartInstance.value || !props.trade || cleanedCandles.length === 0) return;
 
   try {
@@ -546,15 +865,20 @@ const addTradeArrowsAsFallback = (cleanedCandles: any[]) => {
         lineStyle: LineStyle.Dotted,
         priceLineVisible: false,
         lastValueVisible: false,
-        title: `Entry: $${props.trade.entryPrice.toFixed(4)}`,
+        title: `Entry: $${props.trade.entryPrice.toFixed(pricePrecision)}`,
+        priceFormat: {
+          type: 'price',
+          precision: pricePrecision,
+          minMove: Math.pow(0.1, pricePrecision),
+        },
       });
 
       const firstTime = cleanedCandles[0].time;
       const lastTime = cleanedCandles[cleanedCandles.length - 1].time;
       
       entryPriceLine.setData([
-        { time: firstTime, value: props.trade.entryPrice },
-        { time: lastTime, value: props.trade.entryPrice },
+        { time: firstTime, value: Number(props.trade.entryPrice.toFixed(pricePrecision)) },
+        { time: lastTime, value: Number(props.trade.entryPrice.toFixed(pricePrecision)) },
       ]);
     }
 
@@ -566,15 +890,20 @@ const addTradeArrowsAsFallback = (cleanedCandles: any[]) => {
         lineStyle: LineStyle.Dotted,
         priceLineVisible: false,
         lastValueVisible: false,
-        title: `Exit: $${props.trade.exitPrice.toFixed(4)}`,
+        title: `Exit: $${props.trade.exitPrice.toFixed(pricePrecision)}`,
+        priceFormat: {
+          type: 'price',
+          precision: pricePrecision,
+          minMove: Math.pow(0.1, pricePrecision),
+        },
       });
 
       const firstTime = cleanedCandles[0].time;
       const lastTime = cleanedCandles[cleanedCandles.length - 1].time;
       
       exitPriceLine.setData([
-        { time: firstTime, value: props.trade.exitPrice },
-        { time: lastTime, value: props.trade.exitPrice },
+        { time: firstTime, value: Number(props.trade.exitPrice.toFixed(pricePrecision)) },
+        { time: lastTime, value: Number(props.trade.exitPrice.toFixed(pricePrecision)) },
       ]);
     }
 
@@ -585,7 +914,7 @@ const addTradeArrowsAsFallback = (cleanedCandles: any[]) => {
 };
 
 // Обновленная функция для TP/SL с Risk/Reward
-const addTradeLevelsWithRiskReward = (cleanedCandles: any[]) => {
+const addTradeLevelsWithRiskReward = (cleanedCandles: any[], pricePrecision: number) => {
   if (!chartInstance.value || !props.trade || cleanedCandles.length === 0) return;
 
   try {
@@ -612,17 +941,22 @@ const addTradeLevelsWithRiskReward = (cleanedCandles: any[]) => {
           color: '#ff4444',
           lineWidth: 2,
           lineStyle: LineStyle.Dashed,
-          title: `Stop Loss: $${props.trade.stopLoss.toFixed(4)}`,
+          title: `Stop Loss: $${props.trade.stopLoss.toFixed(pricePrecision)}`,
           priceLineVisible: true,
           lastValueVisible: true,
+          priceFormat: {
+            type: 'price',
+            precision: pricePrecision,
+            minMove: Math.pow(0.1, pricePrecision),
+          },
         });
 
         stopLossLineSeries.value.setData([
-          { time: startTime, value: props.trade.stopLoss },
-          { time: endTime, value: props.trade.stopLoss },
+          { time: startTime, value: Number(props.trade.stopLoss.toFixed(pricePrecision)) },
+          { time: endTime, value: Number(props.trade.stopLoss.toFixed(pricePrecision)) },
         ]);
         
-        console.log(`[TradeChart] Stop Loss line added at ${props.trade.stopLoss}`);
+        console.log(`[TradeChart] Stop Loss line added at ${props.trade.stopLoss.toFixed(pricePrecision)}`);
       } catch (slError) {
         console.warn('[TradeChart] Error adding Stop Loss line:', slError);
       }
@@ -635,17 +969,22 @@ const addTradeLevelsWithRiskReward = (cleanedCandles: any[]) => {
           color: '#00C851',
           lineWidth: 2,
           lineStyle: LineStyle.Dashed,
-          title: `Take Profit: $${props.trade.takeProfit.toFixed(4)} | R:R ${riskRewardRatio}`,
+          title: `Take Profit: $${props.trade.takeProfit.toFixed(pricePrecision)} | R:R ${riskRewardRatio}`,
           priceLineVisible: true,
           lastValueVisible: true,
+          priceFormat: {
+            type: 'price',
+            precision: pricePrecision,
+            minMove: Math.pow(0.1, pricePrecision),
+          },
         });
 
         takeProfitLineSeries.value.setData([
-          { time: startTime, value: props.trade.takeProfit },
-          { time: endTime, value: props.trade.takeProfit },
+          { time: startTime, value: Number(props.trade.takeProfit.toFixed(pricePrecision)) },
+          { time: endTime, value: Number(props.trade.takeProfit.toFixed(pricePrecision)) },
         ]);
         
-        console.log(`[TradeChart] Take Profit line added at ${props.trade.takeProfit} with R:R ${riskRewardRatio}`);
+        console.log(`[TradeChart] Take Profit line added at ${props.trade.takeProfit.toFixed(pricePrecision)} with R:R ${riskRewardRatio}`);
       } catch (tpError) {
         console.warn('[TradeChart] Error adding Take Profit line:', tpError);
       }
@@ -675,7 +1014,9 @@ const downloadChart = () => {
         const url = canvas.toDataURL('image/png');
         const link = document.createElement('a');
         const tradeName = props.trade ? `${props.trade.pair}-${props.trade.direction}` : 'trade';
-        const timestamp = props.trade?.entryTimestamp ? new Date(props.trade.entryTimestamp).toISOString().slice(0, 19).replace(/[:-]/g, '') : Date.now();
+        const timestamp = props.trade?.entryTimestamp && props.trade.entryTimestamp > 0 ? 
+          new Date(props.trade.entryTimestamp).toISOString().slice(0, 19).replace(/[:-]/g, '') : 
+          Date.now().toString();
         link.download = `chart-${tradeName}-${timestamp}.png`;
         link.href = url;
         document.body.appendChild(link);
@@ -704,6 +1045,305 @@ const onClose = () => {
   emit('update:visible', false);
 };
 
+// Функция для переключения на таймфрейм бектеста
+const switchToBacktestTimeframe = () => {
+  if (backtestTimeframe.value !== selectedTimeframe.value) {
+    selectedTimeframe.value = backtestTimeframe.value;
+    onTimeframeChange();
+  }
+};
+
+// Функция для переключения на конкретный таймфрейм
+const switchToTimeframe = (timeframe: string) => {
+  if (timeframe !== selectedTimeframe.value) {
+    selectedTimeframe.value = timeframe;
+    onTimeframeChange();
+  }
+};
+
+// Обработчик изменения таймфрейма
+const onTimeframeChange = async () => {
+  if (!props.trade) return;
+  
+  console.log(`[TradeChartModal] Timeframe changed to: ${selectedTimeframe.value}`);
+  currentTimeframe.value = selectedTimeframe.value;
+  
+  // Сбрасываем текущие данные
+  currentCandleData.value = null;
+  
+  // Если это изначальные данные из пропсов и таймфрейм совпадает с бектестом
+  if (props.candleData && selectedTimeframe.value === backtestTimeframe.value) {
+    console.log('[TradeChartModal] Using original data from props');
+    currentCandleData.value = props.candleData;
+    createTradingViewChart();
+    return;
+  }
+  
+  // Пытаемся загрузить данные для нового таймфрейма
+  await loadTimeframeData(selectedTimeframe.value);
+};
+
+// Функция загрузки данных для текущего таймфрейма
+const fetchCurrentTimeframeData = async () => {
+  await fetchMissingData(props.trade?.pair || '', selectedTimeframe.value);
+};
+
+// Обновленная функция для загрузки данных конкретного таймфрейма
+const loadTimeframeData = async (timeframe: string) => {
+  if (!props.trade?.pair) return;
+  
+  isLoadingChart.value = true;
+  
+  try {
+    console.log(`[TradeChartModal] Loading data for timeframe: ${timeframe}`);
+    console.log(`[TradeChartModal] Trade info:`, {
+      pair: props.trade.pair,
+      entryTimestamp: props.trade.entryTimestamp,
+      entryDate: props.trade.entryTimestamp && props.trade.entryTimestamp > 0 ? new Date(props.trade.entryTimestamp).toISOString() : 'Invalid',
+      exitTimestamp: props.trade.exitTimestamp,
+      exitDate: props.trade.exitTimestamp && props.trade.exitTimestamp > 0 ? new Date(props.trade.exitTimestamp).toISOString() : 'ongoing',
+      backtestTimeRange: props.trade.backtestTimeRange
+    });
+    
+    // ИСПРАВЛЕННАЯ ЛОГИКА: Используем диапазон бэктеста без расширения назад
+    let startTime: number;
+    let endTime: number;
+    
+    // Используем диапазон бектеста если доступен
+    if (props.trade.backtestTimeRange) {
+      // ИСПРАВЛЕНИЕ: Диапазон загрузки РАВЕН диапазону бэктеста (не расширяется назад)
+      startTime = props.trade.backtestTimeRange.startTime;
+      endTime = props.trade.backtestTimeRange.endTime;
+      
+      console.log(`[TradeChartModal] Using exact backtest time range:`, {
+        from: props.trade.backtestTimeRange.startTime && props.trade.backtestTimeRange.startTime > 0 ? new Date(props.trade.backtestTimeRange.startTime).toISOString() : 'Invalid',
+        to: props.trade.backtestTimeRange.endTime && props.trade.backtestTimeRange.endTime > 0 ? new Date(props.trade.backtestTimeRange.endTime).toISOString() : 'Invalid',
+        note: 'Данные загружаются строго в диапазоне бэктеста'
+      });
+    } else {
+      // КОНСЕРВАТИВНЫЙ FALLBACK: Минимальный контекст вокруг сделки (принцип "не раньше времени сделки")
+      const tradeEntryTime = props.trade.entryTimestamp;
+      const tradeExitTime = props.trade.exitTimestamp || Date.now();
+      
+      // Уменьшаем контекстный буфер - максимум 7 дней до сделки
+      const contextBufferBefore = 7 * 24 * 60 * 60 * 1000; // Уменьшено с 30 до 7 дней
+      const contextBufferAfter = Math.max(7 * 24 * 60 * 60 * 1000, (tradeExitTime - tradeEntryTime)); // 7 дней или длительность сделки после
+      
+      startTime = tradeEntryTime - contextBufferBefore;
+      endTime = tradeExitTime + contextBufferAfter;
+      
+      // Валидация: не раньше 2020 года и не позже чем через год
+      const earliestDate = new Date('2020-01-01').getTime();
+      const latestDate = Date.now() + 365 * 24 * 60 * 60 * 1000;
+      
+      startTime = Math.max(startTime, earliestDate);
+      endTime = Math.min(endTime, latestDate);
+      
+      console.log(`[TradeChartModal] Using conservative fallback time range:`, {
+        from: startTime && startTime > 0 ? new Date(startTime).toISOString() : 'Invalid',
+        to: endTime && endTime > 0 ? new Date(endTime).toISOString() : 'Invalid',
+        contextDays: (endTime - startTime) / (24 * 60 * 60 * 1000),
+        note: 'Fallback режим - минимальный контекст (7 дней до сделки максимум)'
+      });
+    }
+    
+    // Определяем лимит для таймфрейма (увеличиваем лимиты)
+    let limit = 10000; // Увеличенный базовый лимит
+    if (timeframe === '1m') limit = 20000;
+    else if (timeframe === '5m') limit = 15000;
+    else if (timeframe === '15m') limit = 12000;
+    else if (timeframe === '1h') limit = 15000;
+    else if (timeframe === '4h') limit = 20000;
+    else if (timeframe === '1d') limit = 25000;
+    
+    console.log(`[TradeChartModal] Request parameters:`, {
+      symbol: props.trade.pair,
+      timeframe,
+      startTime,
+      endTime,
+      limit,
+      periodDays: (endTime - startTime) / (24 * 60 * 60 * 1000)
+    });
+    
+    const response = await fetch('/api/data/candles', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        symbol: props.trade.pair,
+        timeframe: timeframe,
+        startTime,
+        endTime,
+        limit: limit
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+    }
+    
+    const apiData = await response.json();
+    
+    console.log(`[TradeChartModal] API Response:`, {
+      success: apiData.success,
+      dataLength: apiData.data?.length || 0,
+      hasData: !!apiData.data,
+      meta: apiData.meta
+    });
+    
+    if (apiData.success && apiData.data && Array.isArray(apiData.data) && apiData.data.length > 0) {
+      console.log(`[TradeChartModal] Successfully loaded ${apiData.data.length} candles for ${timeframe}`);
+      
+      // ДЕТАЛЬНЫЙ АНАЛИЗ ПОЛУЧЕННЫХ ДАННЫХ
+      const firstCandle = apiData.data[0];
+      const lastCandle = apiData.data[apiData.data.length - 1];
+      
+      // Получаем timestamp из разных возможных полей
+      const getTimestamp = (candle: any): number => {
+        // Сначала пробуем timestamp
+        if (candle.timestamp && typeof candle.timestamp === 'number' && candle.timestamp > 0) {
+          return candle.timestamp;
+        }
+        
+        // Затем пробуем openTime (основной формат от бэкенда)
+        if (candle.openTime) {
+          const openTime = typeof candle.openTime === 'string' ? parseInt(candle.openTime, 10) : candle.openTime;
+          if (typeof openTime === 'number' && openTime > 0) {
+            return openTime;
+          }
+        }
+        
+        // Затем пробуем time (альтернативный формат)
+        if (candle.time) {
+          const time = typeof candle.time === 'string' ? parseInt(candle.time, 10) : candle.time;
+          if (typeof time === 'number' && time > 0) {
+            return time;
+          }
+        }
+        
+        console.warn('[TradeChartModal] No valid timestamp found in candle:', candle);
+        return 0; // Возвращаем 0 как fallback
+      };
+      
+      const dataStartTime = getTimestamp(firstCandle);
+      const dataEndTime = getTimestamp(lastCandle);
+      
+      console.log(`[TradeChartModal] Data range analysis:`, {
+        firstCandle: {
+          raw: firstCandle,
+          timestamp: dataStartTime,
+          date: dataStartTime && dataStartTime > 0 ? new Date(dataStartTime).toISOString() : 'Invalid'
+        },
+        lastCandle: {
+          raw: lastCandle,
+          timestamp: dataEndTime,
+          date: dataEndTime && dataEndTime > 0 ? new Date(dataEndTime).toISOString() : 'Invalid'
+        },
+        tradeEntry: {
+          timestamp: props.trade.entryTimestamp,
+          date: props.trade.entryTimestamp && props.trade.entryTimestamp > 0 ? new Date(props.trade.entryTimestamp).toISOString() : 'Invalid',
+          entryPrice: props.trade?.entryPrice || 0,
+          exitDate: props.trade?.exitTimestamp && props.trade.exitTimestamp > 0 ? new Date(props.trade.exitTimestamp).toISOString() : 'ongoing',
+          coverage: {
+            coversTradeEntry: dataStartTime && dataEndTime && 
+                             dataStartTime <= props.trade.entryTimestamp && 
+                             dataEndTime >= props.trade.entryTimestamp,
+            daysBefore: dataStartTime ? (props.trade.entryTimestamp - dataStartTime) / (24 * 60 * 60 * 1000) : 0,
+            daysAfter: dataEndTime ? (dataEndTime - props.trade.entryTimestamp) / (24 * 60 * 60 * 1000) : 0
+          }
+        },
+        tradeExit: {
+          timestamp: props.trade.exitTimestamp,
+          date: props.trade.exitTimestamp && props.trade.exitTimestamp > 0 ? new Date(props.trade.exitTimestamp).toISOString() : 'ongoing',
+          exitPrice: props.trade?.exitPrice || 0
+        },
+        coverage: {
+          coversTradeEntry: dataStartTime && dataEndTime && 
+                           dataStartTime <= props.trade.entryTimestamp && 
+                           dataEndTime >= props.trade.entryTimestamp,
+          daysBefore: dataStartTime ? (props.trade.entryTimestamp - dataStartTime) / (24 * 60 * 60 * 1000) : 0,
+          daysAfter: dataEndTime ? (dataEndTime - props.trade.entryTimestamp) / (24 * 60 * 60 * 1000) : 0
+        }
+      });
+      
+      const coversTradeEntry = dataStartTime && dataEndTime && 
+                              dataStartTime <= props.trade.entryTimestamp && 
+                              dataEndTime >= props.trade.entryTimestamp;
+      
+      if (coversTradeEntry) {
+        const daysBefore = Math.floor((props.trade.entryTimestamp - dataStartTime) / (24 * 60 * 60 * 1000));
+        toast.add({
+          severity: 'success',
+          summary: 'Данные загружены',
+          detail: `График ${timeframe} загружен успешно. ${apiData.data.length} свечей. Контекст: ${daysBefore} дней до сделки.`,
+          life: 4000
+        });
+      } else {
+        // БЕЗОПАСНЫЕ ПРОВЕРКИ ДЛЯ Date ОБЪЕКТОВ
+        let startDateStr = 'Invalid';
+        let endDateStr = 'Invalid';
+        
+        try {
+          if (dataStartTime && dataStartTime > 0) {
+            startDateStr = new Date(dataStartTime).toLocaleDateString();
+          }
+        } catch (e) {
+          console.warn('[TradeChartModal] Invalid start date:', dataStartTime);
+        }
+        
+        try {
+          if (dataEndTime && dataEndTime > 0) {
+            endDateStr = new Date(dataEndTime).toLocaleDateString();
+          }
+        } catch (e) {
+          console.warn('[TradeChartModal] Invalid end date:', dataEndTime);
+        }
+        
+        toast.add({
+          severity: 'warn',
+          summary: 'Ограниченные данные',
+          detail: `Данные ${timeframe} не покрывают время сделки полностью. Диапазон: ${startDateStr} - ${endDateStr}`,
+          life: 6000
+        });
+      }
+      
+      currentCandleData.value = apiData.data;
+      createTradingViewChart();
+    } else {
+      console.warn(`[TradeChartModal] No data found for timeframe ${timeframe}`);
+      console.warn(`[TradeChartModal] API response details:`, apiData);
+      currentCandleData.value = null;
+      
+      // Показываем детальную информацию о проблеме
+      let errorDetail = `Данные для таймфрейма ${timeframe} отсутствуют.`;
+      if (apiData.message) {
+        errorDetail += ` Сообщение сервера: ${apiData.message}`;
+      }
+      
+      toast.add({
+        severity: 'warn',
+        summary: 'Нет данных',
+        detail: errorDetail,
+        life: 6000
+      });
+    }
+    
+  } catch (error: any) {
+    console.error(`[TradeChartModal] Error loading data for timeframe ${timeframe}:`, error);
+    currentCandleData.value = null;
+    
+    toast.add({
+      severity: 'error',
+      summary: 'Ошибка загрузки',
+      detail: `Не удалось загрузить данные для ${timeframe}: ${error.message}`,
+      life: 5000
+    });
+  } finally {
+    isLoadingChart.value = false;
+  }
+};
+
 // Обработка изменения размера окна
 const handleResize = () => {
   if (chartInstance.value && chartContainer.value) {
@@ -715,9 +1355,14 @@ const handleResize = () => {
 };
 
 watch(() => props.visible, (newVal) => {
-  if (newVal && hasChartData.value) {
+  if (newVal) {
+    // Инициализируем модальное окно
+    initializeModal();
+    
     setTimeout(() => {
-      createTradingViewChart();
+      if (hasChartData.value) {
+        createTradingViewChart();
+      }
       window.addEventListener('resize', handleResize);
     }, 300); // Небольшая задержка для анимации модального окна
   } else {
@@ -725,11 +1370,21 @@ watch(() => props.visible, (newVal) => {
   }
 });
 
-watch(() => props.candleData, () => {
-  if (props.visible && hasChartData.value) {
+watch(() => props.candleData, (newData) => {
+  // Обновляем данные только если это таймфрейм бектеста
+  if (props.visible && newData && selectedTimeframe.value === backtestTimeframe.value) {
+    console.log('[TradeChartModal] Props candleData changed, updating current data');
+    currentCandleData.value = newData;
     createTradingViewChart();
   }
 }, { deep: true });
+
+watch(() => props.trade, (newTrade) => {
+  if (props.visible && newTrade) {
+    console.log('[TradeChartModal] Trade changed, reinitializing');
+    initializeModal();
+  }
+});
 
 onUnmounted(() => {
   if (chartInstance.value) {
@@ -737,6 +1392,244 @@ onUnmounted(() => {
   }
   window.removeEventListener('resize', handleResize);
 });
+
+// Универсальная функция для загрузки недостающих данных (использует Bull Queue)
+const fetchMissingData = async (symbol: string, timeframe: string) => {
+  if (!symbol || !timeframe) return;
+  
+  isLoadingData.value = true;
+  
+  try {
+    toast.add({
+      severity: 'info',
+      summary: 'Загрузка данных',
+      detail: `Запуск загрузки данных для ${symbol} (${timeframe})...`,
+      life: 3000
+    });
+
+    // ИСПРАВЛЕННАЯ ЛОГИКА: Используем диапазон бэктеста как минимальную дату
+    let startTime: number;
+    let endTime: number;
+    
+    if (props.trade?.backtestTimeRange) {
+      // ИСПРАВЛЕНИЕ: Начальный диапазон РАВЕН диапазону бэктеста, НЕ расширяется назад от него
+      startTime = props.trade.backtestTimeRange.startTime;
+      endTime = props.trade.backtestTimeRange.endTime;
+      
+      // Валидация входных данных
+      if (!startTime || !endTime || startTime >= endTime) {
+        console.error('[TradeChartModal] Invalid backtest time range:', props.trade.backtestTimeRange);
+        throw new Error('Некорректный временной диапазон бектеста');
+      }
+      
+      // ИСПРАВЛЕНИЕ: Расширяем ТОЛЬКО ВПЕРЕД для получения дополнительного контекста после бэктеста
+      const periodDuration = endTime - startTime;
+      const contextExtension = Math.max(periodDuration * 0.5, 30 * 24 * 60 * 60 * 1000); // Минимум 30 дней расширения
+      
+      // startTime остается НЕИЗМЕННЫМ (равным началу бэктеста)
+      // endTime расширяется вперед для контекста
+      endTime = endTime + contextExtension;
+      
+      console.log(`[TradeChartModal] Using backtest-aligned range for data fetching:`, {
+        backtestRange: {
+          from: props.trade.backtestTimeRange.startTime && props.trade.backtestTimeRange.startTime > 0 ? new Date(props.trade.backtestTimeRange.startTime).toISOString() : 'Invalid',
+          to: props.trade.backtestTimeRange.endTime && props.trade.backtestTimeRange.endTime > 0 ? new Date(props.trade.backtestTimeRange.endTime).toISOString() : 'Invalid'
+        },
+        fetchRange: {
+          from: startTime && startTime > 0 ? new Date(startTime).toISOString() : 'Invalid',
+          to: endTime && endTime > 0 ? new Date(endTime).toISOString() : 'Invalid'
+        },
+        note: 'StartTime = начало бэктеста (НЕ расширяется назад), EndTime расширен для контекста'
+      });
+    } else {
+      // Fallback: Используем широкий исторический диапазон вокруг сделки
+      const tradeEntryTime = props.trade?.entryTimestamp;
+      const tradeExitTime = props.trade?.exitTimestamp;
+      
+      if (!tradeEntryTime) {
+        console.error('[TradeChartModal] No trade entry timestamp available');
+        throw new Error('Нет информации о времени входа в сделку');
+      }
+      
+      // Валидация времени сделки
+      if (typeof tradeEntryTime !== 'number' || tradeEntryTime <= 0) {
+        console.error('[TradeChartModal] Invalid trade entry timestamp:', tradeEntryTime);
+        throw new Error('Некорректное время входа в сделку');
+      }
+      
+      // ИСПРАВЛЕНИЕ: Логика fallback тоже учитывает принцип "не раньше времени сделки"
+      // Берем время сделки как минимум, и добавляем контекст назад ТОЛЬКО если нужно
+      const contextBefore = 7 * 24 * 60 * 60 * 1000; // Уменьшено до 7 дней (было 6 месяцев)
+      const contextAfter = 30 * 24 * 60 * 60 * 1000; // 1 месяц после
+      
+      startTime = tradeEntryTime - contextBefore;
+      endTime = Math.max(tradeExitTime || tradeEntryTime, tradeEntryTime) + contextAfter;
+      
+      console.log(`[TradeChartModal] Using conservative fallback range for data fetching:`, {
+        tradeEntry: tradeEntryTime && tradeEntryTime > 0 ? new Date(tradeEntryTime).toISOString() : 'Invalid',
+        tradeExit: tradeExitTime && tradeExitTime > 0 ? new Date(tradeExitTime).toISOString() : 'ongoing',
+        fetchRange: {
+          from: startTime && startTime > 0 ? new Date(startTime).toISOString() : 'Invalid',
+          to: endTime && endTime > 0 ? new Date(endTime).toISOString() : 'Invalid'
+        },
+        note: 'Fallback режим - минимальный контекст вокруг сделки'
+      });
+    }
+    
+    // УЛУЧШЕННАЯ ВАЛИДАЦИЯ временного диапазона
+    const earliestReasonableDate = new Date('2020-01-01').getTime();
+    const latestReasonableDate = Date.now() + 30 * 24 * 60 * 60 * 1000; // Максимум месяц в будущем
+    
+    if (startTime < earliestReasonableDate) {
+      console.warn(`[TradeChartModal] Start time too early, adjusting:`, startTime && startTime > 0 ? new Date(startTime).toISOString() : 'Invalid');
+      startTime = earliestReasonableDate;
+    }
+    
+    if (endTime > latestReasonableDate) {
+      console.warn(`[TradeChartModal] End time too late, adjusting:`, endTime && endTime > 0 ? new Date(endTime).toISOString() : 'Invalid');
+      endTime = latestReasonableDate;
+    }
+    
+    if (startTime >= endTime) {
+      console.error(`[TradeChartModal] Invalid time range after validation:`, {
+        startTime: startTime && startTime > 0 ? new Date(startTime).toISOString() : 'Invalid',
+        endTime: endTime && endTime > 0 ? new Date(endTime).toISOString() : 'Invalid'
+      });
+      throw new Error('Некорректный временной диапазон после валидации');
+    }
+    
+    // Проверяем, что timestamps валидны для создания Date объектов
+    try {
+      if (startTime && startTime > 0) new Date(startTime).toISOString();
+      if (endTime && endTime > 0) new Date(endTime).toISOString();
+    } catch (error) {
+      console.error(`[TradeChartModal] Invalid timestamp values:`, { startTime, endTime, error });
+      throw new Error('Некорректные значения времени');
+    }
+    
+    console.log(`[TradeChartModal] Final fetch parameters:`, {
+      symbol,
+      timeframe,
+      startTime,
+      endTime,
+      period: `${Math.floor((endTime - startTime) / (24 * 60 * 60 * 1000))} дней`,
+      range: {
+        from: startTime && startTime > 0 ? new Date(startTime).toISOString() : 'Invalid',
+        to: endTime && endTime > 0 ? new Date(endTime).toISOString() : 'Invalid'
+      }
+    });
+
+    const response = await fetch('/api/data/fetch-candles', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        symbol: symbol,
+        timeframes: [timeframe], // API ожидает массив timeframes
+        startTime: startTime,
+        endTime: endTime,
+        limit: 15000 // Увеличенный лимит для массовой загрузки
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[TradeChartModal] API request failed:`, {
+        status: response.status,
+        statusText: response.statusText,
+        errorText
+      });
+      throw new Error(`API request failed: ${response.status} ${response.statusText}. ${errorText}`);
+    }
+
+    const result = await response.json();
+    
+    console.log(`[TradeChartModal] Data fetch job response:`, result);
+
+    // ИСПРАВЛЕННАЯ ЛОГИКА: Определяем успех по содержанию сообщения, а не только по флагу success
+    const isActuallySuccessful = result.success || 
+                                (result.message && result.message.includes('Successfully added')) ||
+                                (result.jobIds && result.jobIds.length > 0) ||
+                                (result.totalSuccessfullyQueued && result.totalSuccessfullyQueued > 0);
+
+    if (isActuallySuccessful) {
+      if (result.jobIds && result.jobIds.length > 0) {
+        const jobId = result.jobIds[0]; // Берем первый jobId из массива
+        toast.add({
+          severity: 'success',
+          summary: 'Задача создана',
+          detail: `Загрузка данных ${symbol} (${timeframe}) запущена в фоновом режиме. ID: ${jobId}`,
+          life: 8000
+        });
+      } else if (result.totalSuccessfullyQueued && result.totalSuccessfullyQueued > 0) {
+        toast.add({
+          severity: 'success',
+          summary: 'Данные обрабатываются',
+          detail: `Загрузка данных ${symbol} (${timeframe}) запущена. ${result.message || ''}`,
+          life: 5000
+        });
+      } else if (result.message && result.message.includes('Successfully added')) {
+        // Обрабатываем успешные сообщения от API
+        toast.add({
+          severity: 'success',
+          summary: 'Задача создана',
+          detail: result.message,
+          life: 8000
+        });
+      } else {
+        toast.add({
+          severity: 'info',
+          summary: 'Данные загружены',
+          detail: result.message || `Данные для ${symbol} (${timeframe}) обновлены.`,
+          life: 5000
+        });
+      }
+      
+      // Ждем некоторое время и перезагружаем данные
+      setTimeout(() => {
+        console.log(`[TradeChartModal] Reloading timeframe data after fetch job...`);
+        loadTimeframeData(timeframe);
+      }, 3000);
+      
+    } else {
+      throw new Error(result.message || 'Неизвестная ошибка при запуске загрузки данных');
+    }
+
+  } catch (error: any) {
+    console.error(`[TradeChartModal] Error fetching missing data:`, error);
+    
+    toast.add({
+      severity: 'error',
+      summary: 'Ошибка загрузки',
+      detail: `Не удалось запустить загрузку данных: ${error.message}`,
+      life: 7000
+    });
+  } finally {
+    isLoadingData.value = false;
+  }
+};
+
+// Инициализация при открытии модального окна
+const initializeModal = () => {
+  if (!props.trade) return;
+  
+  // Устанавливаем таймфрейм бектеста как начальный
+  const btTimeframe = props.trade.backtestTimeframe || '1h';
+  selectedTimeframe.value = btTimeframe;
+  currentTimeframe.value = btTimeframe;
+  
+  console.log(`[TradeChartModal] Initialized with backtest timeframe: ${btTimeframe}`);
+  
+  // Если есть данные из пропсов, используем их
+  if (props.candleData && props.candleData.length > 0) {
+    console.log('[TradeChartModal] Using initial data from props');
+    currentCandleData.value = props.candleData;
+  } else {
+    console.log('[TradeChartModal] No initial data, will need to load');
+    currentCandleData.value = null;
+  }
+};
 </script>
 
 <style scoped>
@@ -775,5 +1668,39 @@ onUnmounted(() => {
 .trade-chart-modal :deep(.p-dialog-footer) {
   border-top: 1px solid #e5e7eb;
   background: #f9fafb;
+}
+
+/* Стили для dropdown таймфрейма */
+:deep(.timeframe-dropdown) {
+  min-width: 100px;
+}
+
+:deep(.timeframe-dropdown .p-dropdown-label) {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+/* Улучшенные кнопки быстрого доступа */
+.quick-timeframe-buttons {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.quick-timeframe-buttons .p-button {
+  font-size: 0.75rem;
+  padding: 0.25rem 0.5rem;
+  min-width: 2.5rem;
+}
+
+/* Индикатор текущего таймфрейма */
+.current-timeframe-indicator {
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #2563eb;
 }
 </style> 

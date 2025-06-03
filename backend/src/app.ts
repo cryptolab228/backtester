@@ -9,6 +9,9 @@ import { initializeDataSource } from '@/config/dataSource';
 import { initWebSocket } from '@/websocket'; // <--- Добавлен импорт initWebSocket
 import { attachQueueEventListeners } from '@/config/queue'; // <--- Импортируем функцию
 // import { initializeScheduler } from '@/config/queue'; // Комментируем импорт
+import path from 'path';
+import fs from 'fs';
+import { ensureDirectoriesExist, getPortfolioResultsDirectory } from '@/utils/paths';
 
 // Добавляем небольшую задержку перед инициализацией воркера
 // чтобы дать Redis время на стабилизацию после старта контейнеров
@@ -19,12 +22,21 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 import dataRoutes from '@/modules/data/dataRoutes'; // Импорт роутов данных
 import settingsRoutes from '@/modules/settings/settingsRoutes'; // <-- Импорт роутов настроек
 import backtesterRoutes from '@/modules/backtester/backtester.routes'; // <-- Импорт роутов бэктестера
+import statisticsRoutes from '@/modules/statistics/statisticsRoutes'; // <-- Импорт роутов статистики
 import DataController from '@/modules/data/dataController'; // <--- Явный импорт DataController
 
 async function startServer() {
   try {
     // Инициализация подключения к БД
     await initializeDataSource();
+
+    // Создаем необходимые директории
+    try {
+      await ensureDirectoriesExist();
+      logger.info(`✅ Portfolio results directory created/verified: ${getPortfolioResultsDirectory()}`);
+    } catch (mkdirError: any) {
+      logger.warn(`⚠️ Failed to create portfolio results directory: ${mkdirError.message}`);
+    }
 
     // Инициализация планировщика BullMQ
     // initializeScheduler(); // Комментируем вызов
@@ -40,14 +52,21 @@ async function startServer() {
     const app: Express = express();
     const port = config.port;
 
+    // Настройки Express для больших файлов и улучшенной производительности
+    app.set('trust proxy', true);
+    
+    // Увеличиваем лимиты для обработки больших запросов
+    app.use(express.json({ limit: '100mb' }));
+    app.use(express.urlencoded({ limit: '100mb', extended: true }));
+
     // Middlewares
     app.use(cors({ // <-- Подключаем cors
       // origin: 'http://localhost:5173', // Разрешаем запросы с frontend dev сервера Vite
       origin: '*', // Временно разрешаем все источники для диагностики
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Разрешенные методы
-      allowedHeaders: ['Content-Type', 'Authorization'], // Разрешенные заголовки
+      allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'Accept'], // Разрешенные заголовки
+      exposedHeaders: ['Content-Length', 'Content-Disposition', 'Accept-Ranges'], // Дополнительные заголовки для скачивания
     }));
-    app.use(express.json()); // Для парсинга JSON body
 
     // --- Диагностический лог --- 
     if (DataController.getQueueJobCounts && typeof DataController.getQueueJobCounts === 'function') {
@@ -71,10 +90,39 @@ async function startServer() {
     // Подключаем роуты модуля бэктестера
     app.use('/api/backtest', backtesterRoutes); // <-- Подключение роутов бэктестера
 
+    // Подключаем роуты модуля статистики
+    app.use('/api/statistics', statisticsRoutes); // <-- Подключение роутов статистики
+
+    // Статический маршрут для файлов с результатами портфельного бэктестинга
+    const staticPath = getPortfolioResultsDirectory();
+    app.use('/portfolio-results', express.static(staticPath, {
+      maxAge: '1h', // Кэшируем файлы на 1 час
+      etag: true,
+      lastModified: true,
+      dotfiles: 'deny',
+      index: false,
+      setHeaders: (res, path) => {
+        if (path.endsWith('.json')) {
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('Content-Disposition', 'attachment');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Disposition');
+          // Дополнительные заголовки для больших файлов
+          res.setHeader('Cache-Control', 'no-cache');
+          res.setHeader('Connection', 'keep-alive');
+        }
+      }
+    }));
+
     // Здесь позже добавим роутеры для бектеста и сканера
 
     // --- Создание HTTP сервера и запуск --- 
     const httpServer = http.createServer(app); // Создаем HTTP сервер
+
+    // Настройки для больших файлов и таймаутов
+    httpServer.timeout = 10 * 60 * 1000; // 10 минут таймаут
+    httpServer.keepAliveTimeout = 5 * 60 * 1000; // 5 минут keep-alive
+    httpServer.headersTimeout = 60 * 1000; // 60 секунд для заголовков
 
     // --- Инициализация WebSocket --- 
     initWebSocket(httpServer); // Передаем HTTP сервер в инициализатор WebSocket
@@ -87,6 +135,8 @@ async function startServer() {
     httpServer.listen(port, () => {
       logger.info(`⚡️[server]: Server is running at http://localhost:${port}`);
       logger.info(`⚡️[websocket]: WebSocket server is listening on the same port.`); // Добавлен лог для WS
+      logger.info(`⚡️[static]: Portfolio results available at http://localhost:${port}/portfolio-results/`);
+      logger.info(`⚡️[api]: Download API available at http://localhost:${port}/api/data/portfolio-results/`);
     });
 
   } catch (error) {

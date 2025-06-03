@@ -113,11 +113,16 @@ export const runBacktestHandler = async (req: Request, res: Response): Promise<v
       };
 
       try {
-        await dataQueue.add(JOB_TYPES.FETCH_CANDLES_AND_RUN_BACKTEST, jobData); // Используем новый тип задачи или передаем флаг
+        const job = await dataQueue.add(JOB_TYPES.FETCH_CANDLES_AND_RUN_BACKTEST, jobData); // Используем новый тип задачи или передаем флаг
         logger.info(`[BacktesterCtrl] Successfully queued job ${JOB_TYPES.FETCH_CANDLES_AND_RUN_BACKTEST} for ${incomingParams.pairSymbol} (${incomingParams.timeframe}).`);
         res.status(202).json({ 
           message: `Candle data for ${incomingParams.pairSymbol} (${incomingParams.timeframe}) is being fetched. Backtest will run automatically once data is ready.`,
-          jobDetails: { symbol: jobData.symbol, timeframe: jobData.timeframe, range: `${new Date(startTimestamp)} - ${new Date(endTimestamp)}` }
+          jobDetails: { 
+            jobId: job.id,
+            symbol: jobData.symbol, 
+            timeframe: jobData.timeframe, 
+            range: `${new Date(startTimestamp)} - ${new Date(endTimestamp)}` 
+          }
         });
       } catch (queueError: any) {
         logger.error(`[BacktesterCtrl] Failed to queue fetch job for ${incomingParams.pairSymbol}: ${queueError.message}`, queueError);
@@ -313,11 +318,12 @@ export const runPortfolioBacktestHandler = async (req: Request, res: Response): 
 
       try {
         // Создадим новый тип задачи для портфельного бектестинга
-        await dataQueue.add('FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST', jobData);
+        const job = await dataQueue.add('FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST', jobData);
         logger.info(`[PortfolioBacktesterCtrl] Successfully queued portfolio backtest job for pairs: ${pairsNeedingData.join(', ')}`);
         res.status(202).json({ 
           message: `Portfolio backtest queued. Data is being fetched for pairs: ${pairsNeedingData.join(', ')}.`,
           jobDetails: { 
+            jobId: job.id,
             pairsNeedingData, 
             pairsReady: existingPairs.filter(p => !pairsNeedingData.includes(p)),
             timeframe: incomingParams.timeframe, 

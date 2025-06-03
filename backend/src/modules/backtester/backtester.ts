@@ -530,7 +530,8 @@ export const runPortfolioBacktest = async (
         // Обновляем кривую эквити
         portfolioEquityCurve.push({ timestamp: activeTrade.exitTimestamp, capital: currentPortfolioCapital });
 
-        logger.debug(`[RunPortfolioBacktest] Closed ${activeTrade.direction} trade for ${pairSymbol}. PnL: ${pnl.toFixed(2)}, Portfolio Capital: ${currentPortfolioCapital.toFixed(2)}`);
+        // ВАЖНОЕ ЛОГИРОВАНИЕ: Закрытие позиции освобождает слот
+        logger.info(`[RunPortfolioBacktest] CLOSED ${activeTrade.direction} trade for ${pairSymbol} (${exitReason}). PnL: ${pnl.toFixed(2)}. Active trades: ${activeTradesPortfolio.size}/${maxConcurrentTrades}. Portfolio Capital: ${currentPortfolioCapital.toFixed(2)}`);
       }
     }
 
@@ -555,7 +556,11 @@ export const runPortfolioBacktest = async (
           signalStrength,
           candle: currentCandle,
         });
-        logger.debug(`[RunPortfolioBacktest] Found ${direction} signal for ${pairSymbol} with strength ${signalStrength}`);
+        
+        // Логирование только важных сигналов для уменьшения размера логов
+        if (activeTradesPortfolio.size >= maxConcurrentTrades - 2) { // Логируем только когда близко к лимиту
+          logger.info(`[RunPortfolioBacktest] Found ${direction} signal for ${pairSymbol} with strength ${signalStrength}. Active trades: ${activeTradesPortfolio.size}/${maxConcurrentTrades}`);
+        }
       }
     }
 
@@ -677,22 +682,33 @@ async function processPortfolioPendingSignals(
 ): Promise<number> {
   let updatedCapital = currentPortfolioCapital;
   
-  logger.debug(`[ProcessPortfolioSignals] Processing ${signals.length} signals with capital ${currentPortfolioCapital}`);
+  // Важное логирование для отслеживания лимита
+  logger.info(`[ProcessPortfolioSignals] Processing ${signals.length} signals with capital ${currentPortfolioCapital}. Active trades: ${activeTradesPortfolio.size}/${maxConcurrentTrades}`);
   
   // Сортируем сигналы по силе (по убыванию)
   signals.sort((a, b) => b.signalStrength - a.signalStrength);
 
+  let signalsProcessed = 0;
+  let signalsSkippedDueToLimit = 0;
+  let signalsSkippedDueToATR = 0;
+  let signalsSkippedDueToCapital = 0;
+
   for (const signal of signals) {
-    logger.debug(`[ProcessPortfolioSignals] Processing signal for ${signal.pairSymbol}: ${signal.direction}, strength: ${signal.signalStrength}`);
+    signalsProcessed++;
     
     // Проверяем лимит одновременных сделок
     if (activeTradesPortfolio.size >= maxConcurrentTrades) {
-      logger.debug(`[ProcessPortfolioSignals] Max concurrent trades limit (${maxConcurrentTrades}) reached. Skipping remaining signals.`);
-      break;
+      signalsSkippedDueToLimit++;
+      // ВАЖНО: Логируем каждый пропущенный сигнал из-за лимита
+      logger.info(`[ProcessPortfolioSignals] SKIPPED signal ${signalsProcessed}/${signals.length} for ${signal.pairSymbol} (${signal.direction}, strength: ${signal.signalStrength.toFixed(2)}) - Max concurrent trades limit (${maxConcurrentTrades}) reached. Active: ${activeTradesPortfolio.size}`);
+      continue; // Изменено с break на continue для учета всех пропусков
     }
+
+    logger.debug(`[ProcessPortfolioSignals] Processing signal ${signalsProcessed}/${signals.length} for ${signal.pairSymbol}: ${signal.direction}, strength: ${signal.signalStrength}`);
 
     // Проверяем, что у нас есть ATR для расчета позиции
     if (!signal.candle.atr || signal.candle.atr <= 0) {
+      signalsSkippedDueToATR++;
       logger.debug(`[ProcessPortfolioSignals] No valid ATR for ${signal.pairSymbol}. ATR: ${signal.candle.atr}. Skipping signal.`);
       continue;
     }
@@ -703,6 +719,7 @@ async function processPortfolioPendingSignals(
     logger.debug(`[ProcessPortfolioSignals] Calculated position size for ${signal.pairSymbol}: ${positionSize}, entry price: ${entryPrice}, capital: ${updatedCapital}`);
 
     if (positionSize <= 0) {
+      signalsSkippedDueToCapital++;
       logger.debug(`[ProcessPortfolioSignals] Position size is 0 or negative for ${signal.pairSymbol}. Insufficient capital.`);
       continue;
     }
@@ -742,13 +759,17 @@ async function processPortfolioPendingSignals(
     };
 
     activeTradesPortfolio.set(signal.pairSymbol, newTrade);
-    logger.debug(`[ProcessPortfolioSignals] Opened ${signal.direction} trade for ${signal.pairSymbol}. Signal strength: ${signal.signalStrength.toFixed(2)}, Entry: ${entryPrice}, Size: ${positionSize}, SL: ${stopLossPrice}, TP: ${takeProfitPrice}`);
+    
+    // ВАЖНОЕ ЛОГИРОВАНИЕ: Открытие новой позиции
+    logger.info(`[ProcessPortfolioSignals] OPENED ${signal.direction} trade for ${signal.pairSymbol}. Signal strength: ${signal.signalStrength.toFixed(2)}, Entry: ${entryPrice}, Size: ${positionSize}, SL: ${stopLossPrice}, TP: ${takeProfitPrice}. Active trades: ${activeTradesPortfolio.size}/${maxConcurrentTrades}`);
 
     // ИСПРАВЛЕНО: НЕ добавляем сделку в tradesByPair здесь - только после закрытия
     // Сделка будет добавлена в tradesByPair только когда закроется в основном цикле
   }
 
-  logger.debug(`[ProcessPortfolioSignals] Finished processing signals. Active trades: ${activeTradesPortfolio.size}`);
+  // Итоговое логирование статистики обработки сигналов
+  logger.info(`[ProcessPortfolioSignals] Finished processing signals. Active trades: ${activeTradesPortfolio.size}/${maxConcurrentTrades}. Signals stats: Processed=${signalsProcessed}, SkippedLimit=${signalsSkippedDueToLimit}, SkippedATR=${signalsSkippedDueToATR}, SkippedCapital=${signalsSkippedDueToCapital}`);
+  
   return updatedCapital;
 }
 

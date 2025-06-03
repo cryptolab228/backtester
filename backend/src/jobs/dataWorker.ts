@@ -1,5 +1,6 @@
-import { Job, JobProgress } from 'bullmq';
+import { Job, Worker as BullWorker } from 'bullmq';
 import logger from '@/utils/logger';
+import config from '@/config';
 import { createWorker, DATA_QUEUE_NAME, dataQueue, broadcastJobCounts } from '@/config/queue';
 import * as okxService from '@/services/okxService';
 import { dataService } from '@/services/dataService';
@@ -7,6 +8,19 @@ import { broadcast } from '@/websocket';
 import { runBacktest, runPortfolioBacktest } from '@/modules/backtester/backtester';
 import type { BacktestRunParameters, PortfolioBacktestRunParameters } from '@/modules/backtester/backtester.types';
 import type { CandleData } from '@/interfaces/marketData.interface';
+import { CandleRequest } from '@/services/optimizedCandleFetcher';
+import fs from 'fs';
+import path from 'path';
+import process from 'process';
+import { getPortfolioResultsDirectory, getPortfolioResultsFilePath } from '@/utils/paths';
+
+// Константы для имен задач
+export const JOB_TYPES = {
+  FETCH_PAIRS: 'fetch-pairs',
+  FETCH_CANDLES: 'fetch-candles',
+  FETCH_CANDLES_AND_RUN_BACKTEST: 'fetch-candles-and-run-backtest',
+  FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST: 'FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST',
+} as const;
 
 // Интерфейсы для данных задач
 interface FetchPairsJobData {
@@ -41,14 +55,6 @@ interface FetchPortfolioDataAndRunBacktestJobData {
 
 type DataJobData = FetchPairsJobData | FetchCandlesJobData | FetchCandlesAndRunBacktestJobData | FetchPortfolioDataAndRunBacktestJobData;
 
-// Константы для имен задач
-export const JOB_TYPES = {
-  FETCH_PAIRS: 'fetch-pairs',
-  FETCH_CANDLES: 'fetch-candles',
-  FETCH_CANDLES_AND_RUN_BACKTEST: 'fetch-candles-and-run-backtest',
-  FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST: 'FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST',
-} as const;
-
 /**
  * Обработчик задачи получения и сохранения списка торговых пар.
  */
@@ -81,10 +87,10 @@ const processFetchCandles = async (job: Job<FetchCandlesJobData>) => {
   logger.info(`Processing job ${JOB_TYPES.FETCH_CANDLES} (ID: ${job.id}) with data:`, job.data);
   try {
     logger.info(`Starting processFetchCandles for job ID: ${job.id}, symbol: ${symbol}, timeframe: ${timeframe}`);
-    logger.debug(`[Job ${job.id}] Calling okxService.getHistoricalCandles for ${symbol}...`);
+    logger.debug(`[Job ${job.id}] Calling okxService.getHistoricalCandlesOptimized for ${symbol}...`);
     
     // Добавляем таймаут для предотвращения зависания при загрузке данных
-    const fetchPromise = okxService.getHistoricalCandles(symbol, timeframe, startTime, endTime, limit);
+    const fetchPromise = okxService.getHistoricalCandlesOptimized(symbol, timeframe, startTime, endTime, limit);
     const timeoutPromise = new Promise<never>((_, reject) => 
       setTimeout(() => reject(new Error(`OKX API timeout for ${symbol} after 5 minutes`)), 5 * 60 * 1000)
     );
@@ -133,8 +139,8 @@ const processFetchCandlesAndRunBacktest = async (job: Job<FetchCandlesAndRunBack
 
   try {
     // 1. Загрузка свечей
-    logger.info(`[Job ${jobId}] Calling okxService.getHistoricalCandles for ${symbol} (${timeframe}) from ${new Date(startTime)} to ${new Date(endTime)}.`);
-    const candlesFromAPI = await okxService.getHistoricalCandles(symbol, timeframe, startTime, endTime);
+    logger.info(`[Job ${jobId}] Calling okxService.getHistoricalCandlesOptimized for ${symbol} (${timeframe}) from ${new Date(startTime)} to ${new Date(endTime)}.`);
+    const candlesFromAPI = await okxService.getHistoricalCandlesOptimized(symbol, timeframe, startTime, endTime);
     logger.info(`[Job ${jobId}] Fetched ${candlesFromAPI.length} candles from API for ${symbol}.`);
 
     // 2. Сохранение свечей
@@ -158,7 +164,7 @@ const processFetchCandlesAndRunBacktest = async (job: Job<FetchCandlesAndRunBack
     }
 
     // 4. Адаптация данных для бэктеста
-    const candlesToBacktest: CandleData[] = candlesFromDB.map(c => ({
+    const candlesToBacktest: CandleData[] = candlesFromDB.map((c: any) => ({
       timestamp: Number(c.timestamp),
       open: c.open,
       high: c.high,
@@ -225,9 +231,9 @@ const processFetchPortfolioDataAndRunBacktest = async (job: Job<FetchPortfolioDa
 
     // 1. Загрузка данных для пар, которым нужны данные
     for (const pairSymbol of pairsNeedingData) {
-      logger.info(`[Job ${jobId}] Fetching data for ${pairSymbol} (${portfolioParams.timeframe}) from ${new Date(startTimestamp)} to ${new Date(endTimestamp)}.`);
+      logger.info(`[Job ${jobId}] Fetching data for pair: ${pairSymbol}`);
       
-      // Загружаем свечи из API
+      // 1.1 Загружаем исторические свечи через API (если нужно)
       const candlesFromAPI = await okxService.getHistoricalCandles(
         pairSymbol, 
         portfolioParams.timeframe, 
@@ -236,18 +242,14 @@ const processFetchPortfolioDataAndRunBacktest = async (job: Job<FetchPortfolioDa
       );
       logger.info(`[Job ${jobId}] Fetched ${candlesFromAPI.length} candles from API for ${pairSymbol}.`);
 
-      // Сохраняем в БД
+      // 1.2 Сохраняем свечи в базу данных
       if (candlesFromAPI.length > 0) {
         await dataService.saveCandles(pairSymbol, portfolioParams.timeframe, candlesFromAPI);
         logger.info(`[Job ${jobId}] Saved ${candlesFromAPI.length} candles to DB for ${pairSymbol}.`);
-      } else {
-        logger.warn(`[Job ${jobId}] No candles fetched from API for ${pairSymbol}.`);
-      }
     }
 
-    // 2. Загрузка всех необходимых данных из БД для портфельного бектеста
-    for (const pairSymbol of portfolioParams.pairSymbols) {
-      logger.info(`[Job ${jobId}] Loading candles from DB for ${pairSymbol} (${portfolioParams.timeframe}).`);
+      // 2. Получаем свечи из БД для портфельного бэктеста
+      logger.info(`[Job ${jobId}] Fetching candles from DB for ${pairSymbol} (${portfolioParams.timeframe}) from ${new Date(startTimestamp)} to ${new Date(endTimestamp)}`);
       const candlesFromDB = await dataService.getCandles(
         pairSymbol, 
         portfolioParams.timeframe, 
@@ -257,7 +259,7 @@ const processFetchPortfolioDataAndRunBacktest = async (job: Job<FetchPortfolioDa
       
       if (candlesFromDB && candlesFromDB.length > 0) {
         // Адаптация данных для портфельного бектестера
-        candlesByPair[pairSymbol] = candlesFromDB.map(c => ({
+        candlesByPair[pairSymbol] = candlesFromDB.map((c: any) => ({
           timestamp: Number(c.timestamp),
           open: c.open,
           high: c.high,
@@ -315,6 +317,325 @@ const processFetchPortfolioDataAndRunBacktest = async (job: Job<FetchPortfolioDa
   }
 };
 
+// НОВАЯ оптимизированная функция для портфельной загрузки с параллельной обработкой
+const processFetchPortfolioDataOptimized = async (job: Job<FetchPortfolioDataAndRunBacktestJobData>) => {
+  const { portfolioParams, pairsNeedingData, startTimestamp, endTimestamp } = job.data;
+  const jobId = job.id;
+  logger.info(`[Worker-OPTIMIZED] Received job ${JOB_TYPES.FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST} (ID: ${jobId}) for ${pairsNeedingData.length} pairs using OPTIMIZED algorithm.`);
+  
+  // ДЕБАГ: Логируем временной диапазон
+  logger.info(`[Job-OPT ${jobId}] DEBUG: Time range requested: ${new Date(startTimestamp)} - ${new Date(endTimestamp)} (${Math.round((endTimestamp - startTimestamp) / (24 * 60 * 60 * 1000))} days)`);
+  logger.info(`[Job-OPT ${jobId}] DEBUG: Portfolio params: ${JSON.stringify({ timeframe: portfolioParams.timeframe, pairSymbols: portfolioParams.pairSymbols.length + ' pairs' })}`);
+  logger.info(`[Job-OPT ${jobId}] DEBUG: Pairs needing data: ${pairsNeedingData.slice(0, 5).join(', ')}${pairsNeedingData.length > 5 ? '...' : ''}`);
+
+  try {
+    // 1. ПРИОРИТЕТ: Сначала загружаем данные из БД для всех пар
+    const candlesFromDB: Record<string, CandleData[]> = {};
+    let totalCandlesFromDB = 0;
+    let pairsWithCompleteData: string[] = [];
+    
+    logger.info(`[Job-OPT ${jobId}] Loading existing data from DATABASE for ${portfolioParams.pairSymbols.length} pairs...`);
+    
+    // ВАЖНО: Ограничиваем количество пар для предотвращения перегрузки
+    const MAX_PAIRS_LIMIT = 50; // Максимум 50 пар за раз
+    const MAX_CANDLES_PER_PAIR = 20000; // Увеличено до 20К свечей на пару (для 2 лет 1h данных ~17500 свечей)
+    const MAX_TOTAL_CANDLES = 500000; // Увеличено до 500К свечей всего
+    
+    if (portfolioParams.pairSymbols.length > MAX_PAIRS_LIMIT) {
+      logger.warn(`[Job-OPT ${jobId}] Too many pairs requested (${portfolioParams.pairSymbols.length}). Limiting to first ${MAX_PAIRS_LIMIT} pairs.`);
+      portfolioParams.pairSymbols = portfolioParams.pairSymbols.slice(0, MAX_PAIRS_LIMIT);
+    }
+    
+    for (const symbol of portfolioParams.pairSymbols) {
+      try {
+        // Ограничиваем временной период для предотвращения загрузки слишком большого объема данных
+        const timeRangeMs = endTimestamp - startTimestamp;
+        const maxTimeRangeMs = 2 * 365 * 24 * 60 * 60 * 1000; // Увеличено до 2 лет
+        
+        let effectiveStartTime = startTimestamp;
+        let effectiveEndTime = endTimestamp;
+        
+        if (timeRangeMs > maxTimeRangeMs) {
+          effectiveStartTime = endTimestamp - maxTimeRangeMs;
+          logger.warn(`[Job-OPT ${jobId}] Time range too large for ${symbol}. Limiting to last 2 years: ${new Date(effectiveStartTime)} - ${new Date(effectiveEndTime)}`);
+        }
+        
+        logger.debug(`[Job-OPT ${jobId}] Loading ${symbol} from DB: ${new Date(effectiveStartTime)} - ${new Date(effectiveEndTime)}`);
+        const candles = await dataService.getCandles(symbol, portfolioParams.timeframe, effectiveStartTime, effectiveEndTime);
+        logger.debug(`[Job-OPT ${jobId}] DB returned ${candles.length} candles for ${symbol}`);
+        
+        // Ограничиваем количество свечей на пару
+        let limitedCandles = candles;
+        if (candles.length > MAX_CANDLES_PER_PAIR) {
+          limitedCandles = candles.slice(-MAX_CANDLES_PER_PAIR); // Берем последние свечи
+          logger.warn(`[Job-OPT ${jobId}] Too many candles for ${symbol} (${candles.length}). Limited to ${MAX_CANDLES_PER_PAIR} recent candles.`);
+        }
+        
+        // ДЕБАГ: Логируем временной диапазон свечей
+        if (limitedCandles.length > 0) {
+          const firstCandle = new Date(limitedCandles[0].timestamp);
+          const lastCandle = new Date(limitedCandles[limitedCandles.length - 1].timestamp);
+          logger.debug(`[Job-OPT ${jobId}] ${symbol} DB data range: ${firstCandle} - ${lastCandle} (${limitedCandles.length} candles)`);
+        }
+        
+        candlesFromDB[symbol] = limitedCandles;
+        totalCandlesFromDB += limitedCandles.length;
+        
+        // Проверяем общий лимит свечей
+        if (totalCandlesFromDB > MAX_TOTAL_CANDLES) {
+          logger.warn(`[Job-OPT ${jobId}] Total candles limit (${MAX_TOTAL_CANDLES}) reached. Stopping data loading.`);
+          break;
+        }
+        
+        if (limitedCandles.length > 0) {
+          pairsWithCompleteData.push(symbol);
+          logger.debug(`[Job-OPT ${jobId}] Loaded ${limitedCandles.length} candles from DB for ${symbol}.`);
+        } else {
+          logger.warn(`[Job-OPT ${jobId}] No data in DB for ${symbol} - may need API fetch.`);
+        }
+      } catch (error: any) {
+        logger.warn(`[Job-OPT ${jobId}] Failed to load ${symbol} from DB: ${error.message}`);
+        candlesFromDB[symbol] = [];
+      }
+    }
+    
+    logger.info(`[Job-OPT ${jobId}] DATABASE load completed: ${pairsWithCompleteData.length}/${portfolioParams.pairSymbols.length} pairs have data, ${totalCandlesFromDB} total candles from DB.`);
+    logger.info(`[Job-OPT ${jobId}] DB data ratio: ${(pairsWithCompleteData.length / portfolioParams.pairSymbols.length * 100).toFixed(1)}% (threshold: 50%)`);
+
+    // 2. Если большинство пар имеют данные в БД, используем их. Иначе догружаем через API
+    const dbDataRatio = pairsWithCompleteData.length / portfolioParams.pairSymbols.length;
+    
+    let finalCandlesData: Record<string, CandleData[]>;
+    
+    if (dbDataRatio >= 0.5) { // Снижено с 80% до 50% - если 50%+ пар имеют данные в БД
+      logger.info(`[Job-OPT ${jobId}] Using DATABASE data (${(dbDataRatio * 100).toFixed(1)}% coverage). Skipping API fetch for performance.`);
+      finalCandlesData = candlesFromDB;
+    } else {
+      // 3. Если данных в БД недостаточно, загружаем через API (как раньше)
+      logger.info(`[Job-OPT ${jobId}] DB data insufficient (${(dbDataRatio * 100).toFixed(1)}% coverage). Fetching via API...`);
+      
+      const requests: CandleRequest[] = pairsNeedingData.map(symbol => ({
+        symbol,
+        timeframe: portfolioParams.timeframe,
+        startTime: startTimestamp,
+        endTime: endTimestamp
+      }));
+
+      const parallelResults = await okxService.getHistoricalCandlesParallel(requests, 3);
+      const totalCandlesFromAPI = Object.values(parallelResults).reduce((sum, candles) => sum + candles.length, 0);
+      
+      logger.info(`[Job-OPT ${jobId}] API fetch completed: ${totalCandlesFromAPI} total candles loaded from API.`);
+
+      // Сохранение новых данных в БД
+      for (const [symbol, candles] of Object.entries(parallelResults)) {
+        if (candles.length > 0) {
+          await dataService.saveCandles(symbol, portfolioParams.timeframe, candles);
+          logger.debug(`[Job-OPT ${jobId}] Saved ${candles.length} candles for ${symbol}.`);
+        }
+      }
+      
+      finalCandlesData = parallelResults;
+    }
+
+    // 4. Запуск портфельного бэктеста с финальными данными
+    const totalFinalCandles = Object.values(finalCandlesData).reduce((sum, candles) => sum + candles.length, 0);
+    const successfulFinalPairs = Object.values(finalCandlesData).filter(candles => candles.length > 0).length;
+    
+    logger.info(`[Job-OPT ${jobId}] Starting OPTIMIZED portfolio backtest with ${totalFinalCandles} total candles across ${successfulFinalPairs} pairs.`);
+    
+    const portfolioBacktestResult = await runPortfolioBacktest(portfolioParams, finalCandlesData);
+    logger.info(`[Job-OPT ${jobId}] OPTIMIZED portfolio backtest finished. Total trades: ${portfolioBacktestResult.overallMetrics.totalPortfolioTrades}, Total PnL: ${portfolioBacktestResult.overallMetrics.totalPortfolioPnl}.`);
+
+    // Проверяем размер результатов перед отправкой
+    const resultString = JSON.stringify(portfolioBacktestResult);
+    const resultSizeMB = resultString.length / (1024 * 1024);
+    logger.info(`[Job-OPT ${jobId}] Portfolio backtest results size: ${resultSizeMB.toFixed(2)}MB`);
+    
+    // Если результаты слишком большие (>10MB), сохраняем в файл
+    if (resultSizeMB > 10) {
+      logger.info(`[Job-OPT ${jobId}] Portfolio backtest results are large (${resultSizeMB.toFixed(2)}MB). Saving to file instead of WebSocket.`);
+      
+      // Создаем имя файла с jobId и timestamp
+      const timestamp = Date.now();
+      const filename = `portfolio-backtest-${jobId}-${timestamp}.json`;
+      const portfolioResultsDir = getPortfolioResultsDirectory();
+      const filepath = getPortfolioResultsFilePath(filename);
+      
+      // Создаем директорию если она не существует
+      try {
+        await fs.promises.mkdir(portfolioResultsDir, { recursive: true });
+        logger.debug(`[Job-OPT ${jobId}] Portfolio results directory created/verified: ${portfolioResultsDir}`);
+        
+        // Проверяем права доступа к директории
+        await fs.promises.access(portfolioResultsDir, fs.constants.W_OK);
+        logger.debug(`[Job-OPT ${jobId}] Portfolio results directory is writable: ${portfolioResultsDir}`);
+      } catch (mkdirError: any) {
+        logger.error(`[Job-OPT ${jobId}] Failed to create portfolio results directory: ${mkdirError.message}`);
+        throw new Error(`Failed to create directory for saving results: ${mkdirError.message}`);
+      }
+      
+      // Сохраняем полные результаты в файл с улучшенной обработкой ошибок
+      try {
+        logger.info(`[Job-OPT ${jobId}] Starting file write: ${filepath} (${resultSizeMB.toFixed(2)}MB)`);
+        
+        // Проверяем доступное место на диске
+        try {
+          const diskStats = await fs.promises.statfs(portfolioResultsDir);
+          const availableSpaceGB = (diskStats.bavail * diskStats.bsize) / (1024 * 1024 * 1024);
+          const requiredSpaceMB = resultSizeMB * 1.1; // 10% запас
+          logger.info(`[Job-OPT ${jobId}] Disk space check: available ${availableSpaceGB.toFixed(2)}GB, required ${requiredSpaceMB.toFixed(2)}MB`);
+          
+          if (availableSpaceGB * 1024 < requiredSpaceMB) {
+            throw new Error(`Insufficient disk space: available ${availableSpaceGB.toFixed(2)}GB, required ${requiredSpaceMB.toFixed(2)}MB`);
+          }
+        } catch (diskError: any) {
+          logger.warn(`[Job-OPT ${jobId}] Could not check disk space: ${diskError.message}`);
+          // Продолжаем выполнение, так как statfs может не поддерживаться на всех системах
+        }
+        
+        await fs.promises.writeFile(filepath, resultString, 'utf8');
+        logger.info(`[Job-OPT ${jobId}] File write completed: ${filepath}`);
+        
+        // Проверяем что файл действительно создался
+        const stats = await fs.promises.stat(filepath);
+        logger.info(`[Job-OPT ${jobId}] File verification successful: ${filename}, size: ${stats.size} bytes`);
+        
+        // Проверяем что содержимое файла корректно
+        const testRead = await fs.promises.readFile(filepath, 'utf8');
+        if (testRead.length === resultString.length) {
+          logger.info(`[Job-OPT ${jobId}] File content verification successful: ${filename}`);
+        } else {
+          logger.error(`[Job-OPT ${jobId}] File content verification failed: expected ${resultString.length} bytes, got ${testRead.length} bytes`);
+          throw new Error(`File content verification failed for ${filename}`);
+        }
+        
+      } catch (writeError: any) {
+        logger.error(`[Job-OPT ${jobId}] Failed to write portfolio results file: ${writeError.message}`, {
+          filepath,
+          filename,
+          error: writeError,
+          stack: writeError.stack
+        });
+        throw new Error(`Failed to save portfolio results to file: ${writeError.message}`);
+      }
+      
+      logger.info(`[Job-OPT ${jobId}] Portfolio backtest results saved to file: ${filename}`);
+      
+      // Отправляем метаданные и ссылку на скачивание
+      broadcast({
+        type: 'PORTFOLIO_BACKTEST_COMPLETED',
+        payload: {
+          jobId,
+          portfolioParams,
+          result: {
+            overallMetrics: portfolioBacktestResult.overallMetrics,
+            metricsByPair: portfolioBacktestResult.metricsByPair,
+            // Ограниченный набор сделок для предварительного просмотра
+            tradesByPair: Object.fromEntries(
+              Object.entries(portfolioBacktestResult.tradesByPair || {}).map(([pair, trades]) => [
+                pair,
+                Array.isArray(trades) ? trades.slice(0, 10) : []
+              ])
+            ),
+            _largeDataSavedToFile: true,
+            _downloadUrl: `/api/portfolio-results/${filename}`,
+            _fullDataSize: `${resultSizeMB.toFixed(2)}MB`,
+            _previewNote: 'This is a preview. Download the full results using the link above.'
+          },
+          optimized: true,
+          fileInfo: {
+            filename,
+            downloadUrl: `/api/portfolio-results/${filename}`,
+            sizeBytes: resultString.length,
+            sizeMB: resultSizeMB.toFixed(2)
+          },
+          stats: {
+            totalCandlesLoaded: totalFinalCandles,
+            successfulPairs: successfulFinalPairs,
+            totalPairs: portfolioParams.pairSymbols.length,
+            fetchMethod: dbDataRatio >= 0.5 ? 'database-primary' : 'api-fallback',
+            dbDataRatio: Math.round(dbDataRatio * 100),
+            candlesFromDB: totalCandlesFromDB
+          }
+        }
+      });
+    } else {
+      // Результаты достаточно малы для WebSocket передачи
+      logger.info(`[Job-OPT ${jobId}] Sending portfolio results via WebSocket with data reduction...`);
+      
+      // Создаем сжатую версию результатов  
+      const reducedResult = {
+        overallMetrics: portfolioBacktestResult.overallMetrics,
+        metricsByPair: portfolioBacktestResult.metricsByPair,
+        // Ограничиваем сделки - только первые 20 на пару
+        tradesByPair: Object.fromEntries(
+          Object.entries(portfolioBacktestResult.tradesByPair || {}).map(([pair, trades]) => [
+            pair,
+            Array.isArray(trades) ? trades.slice(0, 20) : []
+          ])
+        ),
+        _dataReduced: true,
+        _originalTradesCount: portfolioBacktestResult.overallMetrics.totalPortfolioTrades,
+        _note: 'Data reduced for WebSocket transmission'
+      };
+      
+      // Отправляем сжатую версию
+      broadcast({
+        type: 'PORTFOLIO_BACKTEST_COMPLETED',
+        payload: {
+          jobId,
+          portfolioParams,
+          result: reducedResult,
+          optimized: true,
+          stats: {
+            totalCandlesLoaded: totalFinalCandles,
+            successfulPairs: successfulFinalPairs,
+            totalPairs: portfolioParams.pairSymbols.length,
+            fetchMethod: dbDataRatio >= 0.5 ? 'database-primary' : 'api-fallback',
+            dbDataRatio: Math.round(dbDataRatio * 100),
+            candlesFromDB: totalCandlesFromDB
+          }
+        }
+      });
+    }
+
+    // ДОПОЛНИТЕЛЬНО: Отправляем событие о завершении задачи для обновления UI
+    setTimeout(() => {
+      broadcast({
+        type: 'JOB_COMPLETED',
+        payload: {
+          jobId,
+          jobType: 'FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST',
+          status: 'completed',
+          timestamp: new Date().toISOString()
+        }
+      });
+      logger.info(`[Job-OPT ${jobId}] Sent JOB_COMPLETED event to update UI state.`);
+    }, 500); // Небольшая задержка чтобы результаты пришли первыми
+    
+    logger.info(`[Job-OPT ${jobId}] Broadcasted OPTIMIZED PORTFOLIO_BACKTEST_COMPLETED event.`);
+
+    logger.info(`Finished OPTIMIZED job ${JOB_TYPES.FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST} (ID: ${jobId}) successfully.`);
+
+  } catch (error: any) {
+    logger.error(`Error processing OPTIMIZED job ${JOB_TYPES.FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST} (ID: ${jobId}):`, error);
+    
+    broadcast({
+      type: 'PORTFOLIO_BACKTEST_FAILED',
+      payload: {
+        jobId,
+        portfolioParams,
+        error: { 
+          message: error.message,
+        },
+        optimized: true
+      }
+    });
+    logger.info(`[Job-OPT ${jobId}] Broadcasted OPTIMIZED PORTFOLIO_BACKTEST_FAILED event.`);
+    throw error;
+  }
+};
+
 // Главный процессор задач для очереди данных
 const dataProcessor = async (job: Job<DataJobData>) => {
   logger.debug(`[Worker] Picked up job ${job.name} (ID: ${job.id}).`); // Лог получения задачи воркером
@@ -323,6 +644,10 @@ const dataProcessor = async (job: Job<DataJobData>) => {
   if (job.data?.isUserPaused === true) {
     logger.info(`[Worker] Job ${job.id} (${job.name}) is paused by user. Attempting to move to delayed state and skipping processing.`);
     try {
+      // Проверяем текущее состояние задачи
+      const currentState = await job.getState();
+      logger.debug(`[Worker] Job ${job.id} current state before delay: ${currentState}`);
+      
       // Перемещаем в delayed на очень долгий срок (имитация паузы)
       const VERY_LARGE_DELAY = 24 * 60 * 60 * 1000 * 365 * 10; // 10 лет
       await (job as any).moveToDelayed(Date.now() + VERY_LARGE_DELAY, undefined, true); // Добавлен токен и флаг
@@ -333,6 +658,9 @@ const dataProcessor = async (job: Job<DataJobData>) => {
       // Даже если не удалось переместить, не обрабатываем ее
       return; 
     }
+  } else {
+    // Логируем, что задача не на паузе
+    logger.debug(`[Worker] Job ${job.id} (${job.name}) is not paused, proceeding with processing.`);
   }
   // -------------------------------------
 
@@ -347,7 +675,7 @@ const dataProcessor = async (job: Job<DataJobData>) => {
       await processFetchCandlesAndRunBacktest(job as Job<FetchCandlesAndRunBacktestJobData>);
       break;
     case JOB_TYPES.FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST:
-      await processFetchPortfolioDataAndRunBacktest(job as Job<FetchPortfolioDataAndRunBacktestJobData>);
+      await processFetchPortfolioDataOptimized(job as Job<FetchPortfolioDataAndRunBacktestJobData>);
       break;
     default:
       logger.warn(`Unknown job type: ${job.name}`);
@@ -440,9 +768,6 @@ worker.on('failed', async (job: Job | undefined, error: Error) => {
     }
     broadcast(jobDataToSend);
     
-    // ---> Убираем if (typeof jobId === 'string') вокруг broadcastJobCounts <--- 
-    // Логирование, вызывавшее ошибку, уже закомментировано.
-    // Вызываем broadcastJobCounts в любом случае, т.к. он не зависит от jobId.
     logger.debug(`[Worker Listener - failed] Broadcasting job counts after attempting to process job ${jobId || 'unknown'}.`);
     broadcastJobCounts(); 
 

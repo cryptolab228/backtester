@@ -1,11 +1,16 @@
 import axios from 'axios';
 import logger from '@/utils/logger';
+import { OptimizedCandleFetcher, CandleRequest } from './optimizedCandleFetcher';
+import { globalRateLimiter, OPTIMAL_LIMIT_PER_REQUEST } from './rateLimiter';
 
 // Базовый URL для публичного API OKX
 const BASE_URL = 'https://www.okx.com';
 
-// Функция-задержка для обхода Rate Limits
+// Функция-задержка для обхода Rate Limits (DEPRECATED - используется в legacy коде)
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Глобальный экземпляр оптимизированного fetcher
+const optimizedFetcher = new OptimizedCandleFetcher(globalRateLimiter);
 
 // Интерфейс для ответа API свечей
 interface OkxCandleResponse {
@@ -305,4 +310,85 @@ export async function getHistoricalCandles(
   // Если был задан лимит, возвращаем только последние 'limit' свечей (самые новые)
   // Если allCandles короче, вернет все что есть.
   return limit ? allCandles.slice(-Math.min(limit, allCandles.length)) : allCandles;
+}
+
+/**
+ * НОВАЯ ОПТИМИЗИРОВАННАЯ функция получения свечей с умным rate limiting
+ * Рекомендуется использовать вместо getHistoricalCandles для новых реализаций
+ * @param symbol - ID инструмента
+ * @param timeframe - Таймфрейм
+ * @param startTime - Начальное время
+ * @param endTime - Конечное время  
+ * @param limit - Лимит свечей
+ * @returns Promise<CandleData[]>
+ */
+export async function getHistoricalCandlesOptimized(
+  symbol: string,
+  timeframe: string,
+  startTime?: number,
+  endTime?: number,
+  limit?: number
+): Promise<CandleData[]> {
+  logger.info(`[OKX-Optimized] Fetching candles for ${symbol} using optimized algorithm`);
+  
+  const request: CandleRequest = {
+    symbol,
+    timeframe,
+    startTime,
+    endTime,
+    limit
+  };
+  
+  const result = await optimizedFetcher.fetchCandlesForSymbol(symbol, request);
+  
+  if (result.success) {
+    logger.info(`[OKX-Optimized] Successfully fetched ${result.candles.length} candles for ${symbol} in ${result.fetchTimeMs}ms using ${result.requestsCount} requests`);
+    // Логируем статистику rate limiter
+    const stats = globalRateLimiter.getStats();
+    logger.debug(`[OKX-Optimized] Rate limiter stats - Global: ${stats.global}/18, Instruments: ${JSON.stringify(stats.instruments)}`);
+    
+    return result.candles;
+  } else {
+    logger.error(`[OKX-Optimized] Failed to fetch candles for ${symbol}: ${result.error}`);
+    return result.candles; // Возвращаем частичные данные если есть
+  }
+}
+
+/**
+ * НОВАЯ функция параллельной загрузки для портфельных бэктестов
+ * Значительно ускоряет загрузку данных для множественных символов
+ * @param requests - Массив запросов на загрузку
+ * @param concurrentLimit - Лимит параллельных запросов (по умолчанию 3)
+ * @returns Promise<Record<string, CandleData[]>>
+ */
+export async function getHistoricalCandlesParallel(
+  requests: CandleRequest[],
+  concurrentLimit: number = 3
+): Promise<Record<string, CandleData[]>> {
+  logger.info(`[OKX-Parallel] Starting parallel fetch for ${requests.length} requests with concurrency ${concurrentLimit}`);
+  
+  const results = await optimizedFetcher.fetchCandlesParallel(requests, concurrentLimit);
+  
+  // Преобразуем результаты в формат Record<string, CandleData[]>
+  const candlesBySymbol: Record<string, CandleData[]> = {};
+  let totalCandles = 0;
+  let successCount = 0;
+  
+  for (const [symbol, result] of Object.entries(results)) {
+    candlesBySymbol[symbol] = result.candles;
+    totalCandles += result.candles.length;
+    if (result.success) successCount++;
+    
+    if (!result.success) {
+      logger.warn(`[OKX-Parallel] Failed to fetch data for ${symbol}: ${result.error}`);
+    }
+  }
+  
+  logger.info(`[OKX-Parallel] Parallel fetch completed. Success: ${successCount}/${Object.keys(results).length}, Total candles: ${totalCandles}`);
+  
+  // Логируем итоговую статистику rate limiter
+  const stats = globalRateLimiter.getStats();
+  logger.info(`[OKX-Parallel] Final rate limiter stats - Global: ${stats.global}/18, Active instruments: ${Object.keys(stats.instruments).length}`);
+  
+  return candlesBySymbol;
 } 

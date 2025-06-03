@@ -4,6 +4,9 @@ import { JOB_TYPES } from '@/jobs/dataWorker';
 import logger from '@/utils/logger';
 import { Job, JobType } from 'bullmq';
 import { dataService } from '@/services/dataService';
+import path from 'path';
+import fs from 'fs';
+import { getPortfolioResultsFilePath } from '@/utils/paths';
 
 // --- Вынесенная логика для получения данных об очередях --- 
 
@@ -365,10 +368,14 @@ class DataController {
       const currentState = await job.getState();
       logger.debug(`[Controller][pauseJob] Current state for job ${jobId}: ${currentState}`);
 
-      // Разрешаем паузу только для waiting или wait
-      if (currentState !== 'waiting' && currentState !== 'wait') {
-        logger.warn(`[Controller][pauseJob] Job ${jobId} cannot be paused from state: ${currentState}. Only waiting/wait allowed.`);
-        res.status(400).json({ message: `Job cannot be paused from state: ${currentState}. Only waiting/wait allowed.` });
+      // Разрешаем паузу для разных состояний, не только waiting/wait
+      const pausableStates = ['waiting', 'wait', 'active', 'delayed'];
+      if (!pausableStates.includes(currentState)) {
+        logger.warn(`[Controller][pauseJob] Job ${jobId} cannot be paused from state: ${currentState}. Allowed states: ${pausableStates.join(', ')}`);
+        res.status(400).json({ 
+          message: `Job cannot be paused from state: ${currentState}. Allowed states: ${pausableStates.join(', ')}`,
+          currentState 
+        });
         return;
       }
 
@@ -379,8 +386,17 @@ class DataController {
       logger.debug(`[Controller][pauseJob] Updating job ${jobId} data with isUserPaused=true:`, currentData);
       await (job as any).update(currentData); // Используем as any для update
 
-      logger.info(`[Controller][pauseJob] Job ${jobId} marked as paused via data flag.`);
-      res.status(200).json({ message: 'Job marked as paused. It will be skipped by the worker.' });
+      // Проверяем финальное состояние
+      const finalState = await job.getState();
+      const finalData = await job.data;
+
+      logger.info(`[Controller][pauseJob] Job ${jobId} marked as paused via data flag. State: ${currentState} -> ${finalState}`);
+      res.status(200).json({ 
+        message: 'Job marked as paused. It will be skipped by the worker.', 
+        previousState: currentState,
+        finalState: finalState,
+        jobData: finalData
+      });
     } catch (error: any) {
       logger.error(`[Controller][pauseJob] Error marking job ${jobId} as paused:`, error);
       res.status(500).json({ message: error.message || 'Internal server error while marking job as paused' });
@@ -402,20 +418,21 @@ class DataController {
       const currentState = await job.getState();
       logger.debug(`[Controller][resumeJob] Current state for job ${jobId}: ${currentState}`);
       const currentData = job.data || {};
+      logger.debug(`[Controller][resumeJob] Current data for job ${jobId}:`, currentData);
 
       // Проверяем, был ли установлен флаг
       if (currentData.isUserPaused !== true) {
-          logger.warn(`[Controller][resumeJob] Job ${jobId} was not marked as paused via data flag. Cannot resume.`);
-          // Возвращаем 200 OK, так как технически нет ошибки, просто нечего делать
-          // Или можно вернуть 400, если считаем это ошибкой клиента
-          res.status(200).json({ message: 'Job was not paused via data flag.' });
+          logger.warn(`[Controller][resumeJob] Job ${jobId} was not marked as paused via data flag. Current isUserPaused value: ${currentData.isUserPaused}`);
+          res.status(200).json({ 
+            message: 'Job was not paused via data flag.', 
+            currentState,
+            isUserPaused: currentData.isUserPaused 
+          });
           return;
       }
 
       // Удаляем флаг (или устанавливаем в false)
       delete currentData.isUserPaused; 
-      // или currentData.isUserPaused = false; 
-
       logger.debug(`[Controller][resumeJob] Updating job ${jobId} data to remove isUserPaused flag:`, currentData);
       await (job as any).update(currentData); // Используем as any для update
       
@@ -424,18 +441,237 @@ class DataController {
           try {
               logger.info(`[Controller][resumeJob] Job ${jobId} is in delayed state, attempting to promote.`);
               await (job as any).promote(); // Используем as any для promote
-              logger.info(`[Controller][resumeJob] Job ${jobId} promoted successfully.`);
+              logger.info(`[Controller][resumeJob] Job ${jobId} promoted successfully from delayed to waiting.`);
+              
+              // Проверяем новое состояние после promote
+              const newState = await job.getState();
+              logger.info(`[Controller][resumeJob] Job ${jobId} new state after promote: ${newState}`);
           } catch (promoteError: any) {
               // Логируем ошибку, но не прерываем основной ответ, так как флаг снят
               logger.error(`[Controller][resumeJob] Failed to promote job ${jobId} after removing pause flag:`, promoteError);
           }
+      } else {
+          logger.info(`[Controller][resumeJob] Job ${jobId} is in state '${currentState}', no promotion needed.`);
       }
 
-      logger.info(`[Controller][resumeJob] Job ${jobId} resumed via data flag.`);
-      res.status(200).json({ message: 'Job resumed successfully (pause flag removed).' });
+      // Финальная проверка состояния
+      const finalState = await job.getState();
+      const finalData = await job.data;
+      
+      logger.info(`[Controller][resumeJob] Job ${jobId} resumed via data flag. Final state: ${finalState}`);
+      res.status(200).json({ 
+        message: 'Job resumed successfully (pause flag removed).', 
+        previousState: currentState,
+        finalState: finalState,
+        jobData: finalData
+      });
     } catch (error: any) {
       logger.error(`[Controller][resumeJob] Error resuming job ${jobId}:`, error);
       res.status(500).json({ message: error.message || 'Internal server error while resuming job' });
+    }
+  }
+
+  async downloadPortfolioResults(req: Request, res: Response): Promise<void> {
+    try {
+      const filename = req.params.filename;
+      const filepath = getPortfolioResultsFilePath(filename);
+      
+      logger.info(`[Downloads] Download request for file: ${filename}`);
+      logger.debug(`[Downloads] Resolved filepath: ${filepath}`);
+      
+      // Проверяем, что файл существует
+      if (!fs.existsSync(filepath)) {
+        logger.warn(`[Downloads] File not found: ${filepath}`);
+        res.status(404).json({ error: 'File not found' });
+        return;
+      }
+      
+      // Проверяем размер файла
+      const stats = fs.statSync(filepath);
+      logger.info(`[Downloads] Serving file: ${filename}, size: ${stats.size} bytes (${(stats.size / 1024 / 1024).toFixed(2)}MB)`);
+      
+      // Устанавливаем правильные заголовки для скачивания больших файлов
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Disposition');
+      res.setHeader('Content-Length', stats.size.toString());
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('Accept-Ranges', 'bytes'); // Поддержка возобновляемых загрузок
+      
+      // Обрабатываем Range запросы для поддержки возобновляемых загрузок
+      const range = req.headers.range;
+      if (range) {
+        logger.info(`[Downloads] Range request for ${filename}: ${range}`);
+        
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
+        const chunksize = (end - start) + 1;
+        
+        res.status(206); // Partial Content
+        res.setHeader('Content-Range', `bytes ${start}-${end}/${stats.size}`);
+        res.setHeader('Content-Length', chunksize.toString());
+        
+        const stream = fs.createReadStream(filepath, { start, end });
+        stream.pipe(res);
+        
+        stream.on('error', (err) => {
+          logger.error(`[Downloads] Stream error for ${filename}:`, err);
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Error streaming file' });
+          }
+        });
+        
+        stream.on('end', () => {
+          logger.info(`[Downloads] Range request completed for ${filename}: ${start}-${end}`);
+        });
+        
+      } else {
+        // Обычная загрузка полного файла через stream для больших файлов
+        const stream = fs.createReadStream(filepath);
+        
+        stream.on('error', (err) => {
+          logger.error(`[Downloads] Stream error for ${filename}:`, err);
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Error streaming file' });
+          }
+        });
+        
+        stream.on('end', () => {
+          logger.info(`[Downloads] Successfully streamed file: ${filename}`);
+        });
+        
+        stream.on('close', () => {
+          logger.debug(`[Downloads] Stream closed for: ${filename}`);
+        });
+        
+        // Устанавливаем обработчики ошибок для response
+        res.on('error', (err) => {
+          logger.error(`[Downloads] Response error for ${filename}:`, err);
+        });
+        
+        res.on('close', () => {
+          logger.debug(`[Downloads] Response closed for: ${filename}`);
+          stream.destroy(); // Закрываем stream при закрытии response
+        });
+        
+        // Pipe stream в response
+        stream.pipe(res);
+      }
+      
+    } catch (error: any) {
+      logger.error(`[Downloads] Error in download route:`, error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Internal server error' });
+      }
+    }
+  }
+
+  /**
+   * Получает исторические данные свечей напрямую из базы данных.
+   */
+  async getHistoricalCandles(req: Request, res: Response): Promise<void> {
+    try {
+      logger.info(`[Controller] Received request for historical candles: ${JSON.stringify(req.body)}`);
+      
+      const { symbol, timeframe, startTime, endTime, limit = 1000 } = req.body;
+
+      // Валидация входных параметров
+      if (!symbol || typeof symbol !== 'string') {
+        res.status(400).json({ 
+          success: false, 
+          message: 'Missing or invalid symbol parameter' 
+        });
+        return;
+      }
+
+      if (!timeframe || typeof timeframe !== 'string') {
+        res.status(400).json({ 
+          success: false, 
+          message: 'Missing or invalid timeframe parameter' 
+        });
+        return;
+      }
+
+      // Проверяем валидность временных параметров
+      const start = startTime ? new Date(startTime) : null;
+      const end = endTime ? new Date(endTime) : null;
+      
+      if (startTime && (isNaN(start?.getTime() || 0))) {
+        res.status(400).json({ 
+          success: false, 
+          message: 'Invalid startTime parameter' 
+        });
+        return;
+      }
+
+      if (endTime && (isNaN(end?.getTime() || 0))) {
+        res.status(400).json({ 
+          success: false, 
+          message: 'Invalid endTime parameter' 
+        });
+        return;
+      }
+
+      // Ограничиваем количество запрашиваемых свечей
+      const requestLimit = Math.min(Math.max(1, parseInt(limit.toString(), 10) || 1000), 5000);
+      
+      logger.debug(`[Controller] Fetching candles for ${symbol} ${timeframe}:`, {
+        startTime: start?.toISOString(),
+        endTime: end?.toISOString(),
+        limit: requestLimit
+      });
+
+      // Получаем данные через сервис
+      const candleData = await dataService.getHistoricalCandles({
+        symbol: symbol.toUpperCase(),
+        timeframe,
+        startTime: start?.getTime(),
+        endTime: end?.getTime(),
+        limit: requestLimit
+      });
+
+      if (!candleData || !Array.isArray(candleData)) {
+        logger.warn(`[Controller] No candle data found for ${symbol} ${timeframe}`);
+        res.status(404).json({ 
+          success: false, 
+          message: 'No candle data found for the specified parameters',
+          data: []
+        });
+        return;
+      }
+
+      logger.info(`[Controller] Successfully retrieved ${candleData.length} candles for ${symbol} ${timeframe}`);
+      
+      res.status(200).json({ 
+        success: true, 
+        data: candleData,
+        meta: {
+          symbol,
+          timeframe,
+          count: candleData.length,
+          startTime: candleData[0]?.openTime || null,
+          endTime: candleData[candleData.length - 1]?.openTime || null
+        }
+      });
+
+    } catch (error: any) {
+      logger.error(`[Controller] Error fetching historical candles: ${error.message}`, { 
+        stack: error.stack,
+        body: req.body 
+      });
+      
+      if (!res.headersSent) {
+        res.status(500).json({ 
+          success: false, 
+          message: 'Failed to fetch historical candles', 
+          error: error.message 
+        });
+      }
     }
   }
 }

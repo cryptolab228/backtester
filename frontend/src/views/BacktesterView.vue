@@ -535,6 +535,7 @@
       :trade="selectedTrade"
       :candleData="tradeCandleData"
       @close="onTradeChartClose"
+      @retry-load="retryLoadChart"
     />
   </div>
 </template>
@@ -690,7 +691,7 @@ const handleWebSocketMessage = (event: MessageEvent) => {
     } 
     // Обработка портфельного бектеста
     else if (message.type === 'PORTFOLIO_BACKTEST_COMPLETED' && message.payload) {
-      const { jobId: completedJobId, result } = message.payload;
+      const { jobId: completedJobId, result, fileInfo } = message.payload;
       
       if (pendingJobId.value && pendingJobId.value !== completedJobId) {
         logger.info(`[BacktesterView] Received PORTFOLIO_BACKTEST_COMPLETED for job ${completedJobId}, but was expecting ${pendingJobId.value}.`);
@@ -706,19 +707,51 @@ const handleWebSocketMessage = (event: MessageEvent) => {
         
       if (pendingJobId.value === completedJobId) {
          pendingJobId.value = null;
-         currentJobStatus.value = null;
+           currentJobStatus.value = null;
          backtestStore.clearCurrentAbortController();
          clearActiveJobState();
       }
 
       localStorage.setItem(PORTFOLIO_RESULTS_KEY, JSON.stringify(result));
 
+        // Проверяем, сохранены ли результаты в файл
+        if (result._largeDataSavedToFile && fileInfo) {
+          logger.info(`[BacktesterView] Large results saved to file: ${fileInfo.filename} (${fileInfo.sizeMB}MB)`);
+
         safeToast({ 
         severity: 'success', 
         summary: 'Портфельный Бектест Завершен', 
-          detail: `Портфельный бектест успешно завершен. Всего сделок: ${result.overallMetrics?.totalPortfolioTrades || 0}`, 
+            detail: `Бектест завершен! Результаты (${fileInfo.sizeMB}MB) сохранены в файл. Доступна ссылка для скачивания.`, 
+            life: 8000 
+          });
+          
+          // Показываем дополнительное уведомление о скачивании
+          setTimeout(() => {
+            safeToast({ 
+              severity: 'info', 
+              summary: 'Файл результатов доступен', 
+              detail: `Полные результаты доступны по ссылке в разделе результатов. Файл: ${fileInfo.filename}`, 
+              life: 10000 
+            });
+          }, 2000);
+          
+        } else {
+          // Обычные результаты через WebSocket
+          let detailMessage = `Портфельный бектест успешно завершен. Всего сделок: ${result.overallMetrics?.totalPortfolioTrades || 0}`;
+          
+          // Проверяем, были ли данные сокращены
+          if (result._dataReduced) {
+            const originalCount = result._originalTradesCount || 0;
+            detailMessage += `. Данные сокращены для передачи (было ${originalCount} сделок).`;
+          }
+          
+          safeToast({ 
+            severity: 'success', 
+            summary: 'Портфельный Бектест Завершен', 
+            detail: detailMessage, 
         life: 5000 
       });
+        }
       }
     }
     // Обработка ошибок обычного бектеста
@@ -777,11 +810,83 @@ const handleWebSocketMessage = (event: MessageEvent) => {
       
       backtestStore.error = errorMessage;
       backtestStore.isLoading = false;
+      
       if (pendingJobId.value === failedJobId) {
         pendingJobId.value = null;
         currentJobStatus.value = null;
         backtestStore.clearCurrentAbortController();
+        clearActiveJobState();
       }
+    }
+
+    // Обработка WebSocket ошибок (новое)
+    else if (message.type === 'WEBSOCKET_ERROR' && message.payload) {
+      logger.warn(`[BacktesterView] WebSocket error received:`, message.payload);
+      
+      if (message.payload.message?.includes('Portfolio backtest results too large')) {
+        safeToast({ 
+          severity: 'warn',
+          summary: 'Результаты слишком большие',
+          detail: 'Результаты портфельного бэктеста слишком велики для передачи. Попробуйте обновить страницу для отображения сохраненных результатов.',
+          life: 8000
+        });
+        
+        // Попытаемся загрузить результаты из localStorage
+        const savedResults = localStorage.getItem(PORTFOLIO_RESULTS_KEY);
+        if (savedResults) {
+          try {
+            const parsedResults = JSON.parse(savedResults);
+            backtestStore.portfolioResults = parsedResults;
+            backtestStore.isLoading = false;
+            
+            safeToast({ 
+              severity: 'info',
+              summary: 'Результаты восстановлены',
+              detail: 'Результаты успешно загружены из локального хранилища.',
+              life: 5000
+            });
+          } catch (e) {
+            logger.error('[BacktesterView] Failed to parse saved portfolio results:', e);
+          }
+        }
+      } else {
+        safeToast({ 
+          severity: 'error',
+          summary: 'Ошибка WebSocket',
+          detail: message.payload.message || 'Произошла ошибка при передаче данных',
+          life: 5000
+        });
+      }
+    }
+
+    // Обработка сжатых данных (новое)
+    else if (message._compressed) {
+      try {
+        logger.info(`[BacktesterView] Received compressed message. Original size: ${message.originalSize}, Compressed size: ${message.compressedSize}`);
+        
+        safeToast({ 
+          severity: 'info',
+          summary: 'Данные сжаты',
+          detail: `Получены сжатые результаты (${Math.round(message.compressedSize / 1024)}KB). Обработка...`,
+          life: 3000
+        });
+        
+        // Здесь можно добавить логику для декомпрессии данных если необходимо
+        // В текущей реализации backend отправляет уже готовые к использованию данные
+      } catch (error) {
+        logger.error('[BacktesterView] Error handling compressed message:', error);
+      }
+    }
+
+    // Обработка уведомлений о уменьшенных данных (новое)
+    else if (message.payload?.result?._dataReduced) {
+      const originalCount = message.payload.result._originalTradesCount || 0;
+      safeToast({ 
+        severity: 'warn',
+        summary: 'Данные сокращены',
+        detail: `Отображаются сокращенные результаты из-за большого объема данных. Всего было ${originalCount} сделок.`,
+        life: 6000
+      });
     }
     else if (message.type === 'job_updated' && 
              (message.payload?.name === JOB_TYPES_FRONTEND.FETCH_CANDLES_AND_RUN_BACKTEST ||
@@ -962,10 +1067,10 @@ onMounted(async () => {
     try {
       logger.info(`[BacktesterView] Attempting to restore active job state (attempt ${retryCount + 1}/${maxRetries})`);
       
-      if (isComponentMounted.value) {
-        await restoreActiveJobState();
+    if (isComponentMounted.value) {
+      await restoreActiveJobState();
         logger.info('[BacktesterView] Active job state restoration completed successfully');
-      }
+    }
     } catch (error) {
       logger.error(`[BacktesterView] Error restoring active job state (attempt ${retryCount + 1}):`, error);
       
@@ -1490,9 +1595,9 @@ const restoreActiveJobState = async () => {
     return;
   }
 
-  try {
-    const savedJobState = JSON.parse(savedJobStateRaw);
-    const { jobId, jobType, timestamp } = savedJobState;
+    try {
+      const savedJobState = JSON.parse(savedJobStateRaw);
+      const { jobId, jobType, timestamp } = savedJobState;
     
     logger.info(`[BacktesterView] Found saved job state:`, { jobId, jobType, timestamp });
     
@@ -1501,70 +1606,70 @@ const restoreActiveJobState = async () => {
       localStorage.removeItem(ACTIVE_JOB_KEY);
       return;
     }
-    
-    // Проверяем, что задача не слишком старая (максимум 24 часа)
-    const maxAge = 24 * 60 * 60 * 1000; // 24 часа
-    if (Date.now() - timestamp > maxAge) {
-      logger.info('[BacktesterView] Active job state too old, clearing job state only');
-      localStorage.removeItem(ACTIVE_JOB_KEY);
-      return;
-    }
-    
-    // Проверяем реальный статус задачи на сервере
-    try {
-      logger.info(`[BacktesterView] Checking job status for jobId: ${jobId}`);
-      const { getJobDetails } = await import('@/services/apiService');
-      const jobDetails = await getJobDetails(jobId);
       
+      // Проверяем, что задача не слишком старая (максимум 24 часа)
+      const maxAge = 24 * 60 * 60 * 1000; // 24 часа
+      if (Date.now() - timestamp > maxAge) {
+      logger.info('[BacktesterView] Active job state too old, clearing job state only');
+        localStorage.removeItem(ACTIVE_JOB_KEY);
+        return;
+      }
+      
+      // Проверяем реальный статус задачи на сервере
+      try {
+      logger.info(`[BacktesterView] Checking job status for jobId: ${jobId}`);
+        const { getJobDetails } = await import('@/services/apiService');
+        const jobDetails = await getJobDetails(jobId);
+        
       logger.info(`[BacktesterView] Received job details:`, jobDetails);
       
       // Восстанавливаем ТОЛЬКО если задача все еще активна или ожидает выполнения
-      if (jobDetails.status === 'active' || jobDetails.status === 'waiting' || jobDetails.status === 'wait') {
+        if (jobDetails.status === 'active' || jobDetails.status === 'waiting' || jobDetails.status === 'wait') {
         logger.info(`[BacktesterView] Restoring active job: ${jobId} with status: ${jobDetails.status}`);
         
-        pendingJobId.value = jobId;
+          pendingJobId.value = jobId;
         currentJobStatus.value = jobDetails.status;
-        backtestStore.isLoading = true;
-        
-        // Показываем уведомление о восстановлении состояния
-        safeToast({
-          severity: 'info',
-          summary: 'Восстановление состояния',
+          backtestStore.isLoading = true;
+          
+          // Показываем уведомление о восстановлении состояния
+          safeToast({
+            severity: 'info',
+            summary: 'Восстановление состояния',
           detail: `Обнаружен активный ${jobType === 'portfolio' ? 'портфельный' : 'обычный'} бектест. Статус: ${getJobStatusText(jobDetails.status)}. ID: ${jobId}`,
-          life: 5000
-        });
-        
+            life: 5000
+          });
+          
         logger.info(`[BacktesterView] Successfully restored active job state: ${jobId} (${jobType}) with status: ${jobDetails.status}`);
-      } else if (jobDetails.status === 'completed') {
+        } else if (jobDetails.status === 'completed') {
         // Задача завершена - просто очищаем состояние активной задачи, НО результаты оставляем!
         logger.info(`[BacktesterView] Job ${jobId} completed, results should be available`);
-        safeToast({
+          safeToast({
           severity: 'success',
-          summary: 'Задача завершена',
+            summary: 'Задача завершена',
           detail: `${jobType === 'portfolio' ? 'Портфельный' : 'Обычный'} бектест завершен. Результаты доступны.`,
           life: 5000
-        });
+          });
         // Очищаем только состояние активной задачи, но НЕ трогаем результаты!
-        localStorage.removeItem(ACTIVE_JOB_KEY);
-      } else if (jobDetails.status === 'failed') {
+          localStorage.removeItem(ACTIVE_JOB_KEY);
+        } else if (jobDetails.status === 'failed') {
         // Задача провалилась - очищаем состояние и показываем ошибку
         logger.info(`[BacktesterView] Job ${jobId} failed, clearing active job state`);
-        safeToast({
-          severity: 'error',
-          summary: 'Задача провалилась',
+          safeToast({
+            severity: 'error',
+            summary: 'Задача провалилась',
           detail: `${jobType === 'portfolio' ? 'Портфельный' : 'Обычный'} бектест завершился с ошибкой.`,
-          life: 7000
-        });
+            life: 7000
+          });
         // Очищаем только состояние активной задачи
-        localStorage.removeItem(ACTIVE_JOB_KEY);
-      } else {
+          localStorage.removeItem(ACTIVE_JOB_KEY);
+        } else {
         // Неизвестный статус - очищаем состояние активной задачи
         logger.info(`[BacktesterView] Job ${jobId} has status: ${jobDetails.status}, clearing active job state`);
-        localStorage.removeItem(ACTIVE_JOB_KEY);
-      }
+          localStorage.removeItem(ACTIVE_JOB_KEY);
+        }
     } catch (jobCheckError: any) {
-      // Если не можем получить статус задачи (возможно, она была удалена)
-      logger.warn(`[BacktesterView] Could not check job ${jobId} status:`, jobCheckError);
+        // Если не можем получить статус задачи (возможно, она была удалена)
+        logger.warn(`[BacktesterView] Could not check job ${jobId} status:`, jobCheckError);
       
       // Проверяем тип ошибки
       if (jobCheckError.response?.status === 404) {
@@ -1603,11 +1708,11 @@ const restoreActiveJobState = async () => {
       }
       
       // Очищаем только состояние активной задачи, результаты оставляем
+        localStorage.removeItem(ACTIVE_JOB_KEY);
+      }
+    } catch (e) {
+      logger.error('[BacktesterView] Failed to parse active job state:', e);
       localStorage.removeItem(ACTIVE_JOB_KEY);
-    }
-  } catch (e) {
-    logger.error('[BacktesterView] Failed to parse active job state:', e);
-    localStorage.removeItem(ACTIVE_JOB_KEY);
     throw e; // Пробрасываем ошибку для retry логики
   }
 };
@@ -1653,7 +1758,7 @@ const getAllPortfolioTrades = () => {
     const trades: (any & { pair: string })[] = [];
     Object.entries(portfolioResultsStore.value.tradesByPair).forEach(([pair, pairTrades]) => {
       if (pairTrades && Array.isArray(pairTrades)) {
-        pairTrades.forEach(trade => {
+        pairTrades.forEach((trade: any) => {
           if (trade && typeof trade === 'object') {
             trades.push({ 
               ...trade, 
@@ -1671,7 +1776,7 @@ const getAllPortfolioTrades = () => {
     });
     
     // Сортируем по времени входа (новые сначала)
-    return trades.sort((a, b) => (b.entryTimestamp || 0) - (a.entryTimestamp || 0));
+    return trades.sort((a: any, b: any) => (b.entryTimestamp || 0) - (a.entryTimestamp || 0));
   } catch (error) {
     console.error('Error processing all trades data:', error);
     return [];
@@ -1691,52 +1796,8 @@ const formatDate = (timestamp: number) => {
 
 // Функция для обработки клика на сделку
 const onTradeClick = async (event: any) => {
-  console.log('Trade clicked:', event.data);
-  selectedTrade.value = event.data;
-  
-  // Генерируем тестовые данные свечей для демонстрации графика
-  // В будущем здесь будет запрос к бэкенду за реальными данными
-  const trade = event.data;
-  const startTime = trade.entryTimestamp || Date.now() - 24 * 60 * 60 * 1000;
-  const endTime = trade.exitTimestamp || Date.now();
-  const entryPrice = trade.entryPrice || 100;
-  
-  // Создаем массив тестовых свечей вокруг времени сделки
-  const testCandles: Array<{
-    timestamp: number;
-    open: number;
-    high: number;
-    low: number;
-    close: number;
-    volume: number;
-  }> = [];
-  const timeStep = 5 * 60 * 1000; // 5 минут между свечами
-  const numCandles = Math.max(20, Math.floor((endTime - startTime) / timeStep));
-  
-  for (let i = 0; i < numCandles; i++) {
-    const timestamp = startTime + (i * timeStep);
-    const basePrice = entryPrice + (Math.random() - 0.5) * entryPrice * 0.02; // ±2% от цены входа
-    const high: number = basePrice + Math.random() * entryPrice * 0.005; // +0.5%
-    const low: number = basePrice - Math.random() * entryPrice * 0.005; // -0.5%
-    const open: number = i === 0 ? entryPrice : testCandles[i-1].close;
-    const close: number = basePrice;
-    
-    testCandles.push({
-      timestamp,
-      open,
-      high,
-      low,
-      close,
-      volume: Math.floor(Math.random() * 1000000)
-    });
-  }
-  
-  tradeCandleData.value = testCandles;
-  showTradeChart.value = true;
-  
-  // TODO: Заменить на реальный запрос к бэкенду
-  // const candleResponse = await fetch(`/api/candles/${trade.pair}?from=${trade.entryTimestamp}&to=${trade.exitTimestamp || Date.now()}`);
-  // tradeCandleData.value = await candleResponse.json();
+  console.log('[BacktesterView] Trade clicked:', event.data);
+  await openTradeChart(event.data);
 };
 
 const onTradeChartClose = () => {
@@ -1790,6 +1851,221 @@ const manualCheckActiveJobs = async () => {
       detail: 'Не удалось получить информацию о активных задачах на сервере.',
       life: 7000
     });
+  }
+};
+
+// Функция для повторной попытки загрузки графика с другим таймфреймом
+const retryLoadChart = async () => {
+  if (!selectedTrade.value) return;
+  
+  safeToast({
+    severity: 'info',
+    summary: 'Повторная загрузка',
+    detail: 'Пробуем загрузить график с другими параметрами...',
+    life: 3000
+  });
+  
+  // Повторно вызываем openTradeChart для той же сделки
+  await openTradeChart(selectedTrade.value);
+};
+
+const openTradeChart = async (trade: any) => {
+  if (!trade) return;
+  
+  selectedTrade.value = trade;
+  showTradeChart.value = true;
+  tradeCandleData.value = null; // Сброс данных
+  
+  try {
+    console.log(`[BacktesterView] Fetching candle data for trade:`, {
+      pair: trade.pair,
+      entryTime: trade.entryTimestamp && trade.entryTimestamp > 0 ? new Date(trade.entryTimestamp).toISOString() : 'Invalid',
+      exitTime: trade.exitTimestamp && trade.exitTimestamp > 0 ? new Date(trade.exitTimestamp).toISOString() : 'ongoing'
+    });
+    
+    // УПРОЩЕННАЯ ЛОГИКА: Используем ТОЛЬКО таймфрейм бектеста
+    let startTime: number;
+    let endTime: number;
+    let backtestTimeframe: string;
+    
+    // Получаем фактический таймфрейм бектеста
+    if (backtestStore.isPortfolioMode) {
+      backtestTimeframe = portfolioTimeframe.value || '1h';
+      if (portfolioStartDate.value && portfolioEndDate.value) {
+        startTime = portfolioStartDate.value.getTime();
+        endTime = portfolioEndDate.value.getTime();
+      } else {
+        // Fallback: строим диапазон вокруг сделки (минимум 7 дней)
+        const tradeEntryTime = trade.entryTimestamp;
+        const tradeExitTime = trade.exitTimestamp || Date.now();
+        const tradeDuration = tradeExitTime - tradeEntryTime;
+        const contextBuffer = Math.max(tradeDuration * 2, 7 * 24 * 60 * 60 * 1000); // Минимум 7 дней контекста
+        startTime = tradeEntryTime - contextBuffer;
+        endTime = tradeExitTime + contextBuffer;
+      }
+    } else {
+      backtestTimeframe = timeframe.value || '1h';
+      if (startDate.value && endDate.value) {
+        startTime = startDate.value.getTime();
+        endTime = endDate.value.getTime();
+      } else {
+        // Fallback: строим диапазон вокруг сделки (минимум 7 дней)
+        const tradeEntryTime = trade.entryTimestamp;
+        const tradeExitTime = trade.exitTimestamp || Date.now();
+        const tradeDuration = tradeExitTime - tradeEntryTime;
+        const contextBuffer = Math.max(tradeDuration * 2, 7 * 24 * 60 * 60 * 1000); // Минимум 7 дней контекста
+        startTime = tradeEntryTime - contextBuffer;
+        endTime = tradeExitTime + contextBuffer;
+      }
+    }
+    
+    // Валидация временного диапазона
+    const now = Date.now();
+    const earliestReasonableDate = new Date('2020-01-01').getTime();
+    
+    if (startTime < earliestReasonableDate) {
+      startTime = Math.max(earliestReasonableDate, trade.entryTimestamp - 30 * 24 * 60 * 60 * 1000);
+    }
+    if (startTime > now) {
+      startTime = trade.entryTimestamp - 7 * 24 * 60 * 60 * 1000;
+    }
+    if (endTime > now + 24 * 60 * 60 * 1000) {
+      endTime = Math.min(now, (trade.exitTimestamp || trade.entryTimestamp) + 7 * 24 * 60 * 60 * 1000);
+    }
+    
+    console.log(`[BacktesterView] Using backtest timeframe: ${backtestTimeframe}`, {
+      timeRange: {
+        from: startTime && startTime > 0 ? new Date(startTime).toISOString() : 'Invalid',
+        to: endTime && endTime > 0 ? new Date(endTime).toISOString() : 'Invalid'
+      },
+      tradeEntry: trade.entryTimestamp && trade.entryTimestamp > 0 ? new Date(trade.entryTimestamp).toISOString() : 'Invalid',
+      tradeExit: trade.exitTimestamp && trade.exitTimestamp > 0 ? new Date(trade.exitTimestamp).toISOString() : 'ongoing'
+    });
+    
+    // Устанавливаем информацию о таймфрейме для TradeChartModal
+    selectedTrade.value.backtestTimeframe = backtestTimeframe;
+    selectedTrade.value.backtestTimeRange = {
+      startTime,
+      endTime
+    };
+    
+    console.log(`[BacktesterView] Setting trade info for TradeChartModal:`, {
+      backtestTimeframe,
+      timeRange: {
+        from: startTime && startTime > 0 ? new Date(startTime).toISOString() : 'Invalid',
+        to: endTime && endTime > 0 ? new Date(endTime).toISOString() : 'Invalid',
+        periodDays: (endTime - startTime) / (24 * 60 * 60 * 1000)
+      },
+      trade: {
+        pair: trade.pair,
+        entryDate: trade.entryTimestamp && trade.entryTimestamp > 0 ? new Date(trade.entryTimestamp).toISOString() : 'Invalid',
+        exitDate: trade.exitTimestamp && trade.exitTimestamp > 0 ? new Date(trade.exitTimestamp).toISOString() : 'ongoing'
+      }
+    });
+    
+    // Определяем лимит на основе таймфрейма
+    let limit = 5000;
+    if (backtestTimeframe === '15m') limit = 8000;
+    else if (backtestTimeframe === '1h') limit = 10000;
+    else if (backtestTimeframe === '4h') limit = 12000;
+    else if (backtestTimeframe === '1d') limit = 15000;
+    
+    // Запрос к API для получения данных в таймфрейме бектеста
+    const response = await fetch('/api/data/candles', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        symbol: trade.pair,
+        timeframe: backtestTimeframe,
+        startTime,
+        endTime,
+        limit: limit
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+    }
+    
+    const apiData = await response.json();
+    
+    if (apiData.success && apiData.data && Array.isArray(apiData.data) && apiData.data.length > 0) {
+      console.log(`[BacktesterView] Successfully loaded ${apiData.data.length} candles for timeframe ${backtestTimeframe}`);
+      
+      // Проверяем покрытие времени сделки
+      const firstCandle = apiData.data[0];
+      const lastCandle = apiData.data[apiData.data.length - 1];
+      
+      // ИСПРАВЛЕННАЯ функция получения timestamp с поддержкой openTime
+      const getTimestamp = (candle: any): number => {
+        if (candle.timestamp && typeof candle.timestamp === 'number' && candle.timestamp > 0) {
+          return candle.timestamp;
+        }
+        if (candle.openTime) {
+          const openTime = typeof candle.openTime === 'string' ? parseInt(candle.openTime, 10) : candle.openTime;
+          if (typeof openTime === 'number' && openTime > 0) {
+            return openTime;
+          }
+        }
+        if (candle.time) {
+          const time = typeof candle.time === 'string' ? parseInt(candle.time, 10) : candle.time;
+          if (typeof time === 'number' && time > 0) {
+            return time;
+          }
+        }
+        return 0;
+      };
+      
+      const dataStartTime = getTimestamp(firstCandle);
+      const dataEndTime = getTimestamp(lastCandle);
+      const coversTradeEntry = dataStartTime && dataEndTime && dataStartTime <= trade.entryTimestamp && dataEndTime >= trade.entryTimestamp;
+      
+      if (coversTradeEntry) {
+        safeToast({
+          severity: 'success',
+          summary: 'Данные загружены',
+          detail: `График загружен с таймфреймом бектеста (${backtestTimeframe}). ${apiData.data.length} свечей.`,
+          life: 3000
+        });
+      } else {
+        safeToast({
+          severity: 'warn',
+          summary: 'Ограниченные данные',
+          detail: `Данные (${backtestTimeframe}) не полностью покрывают время сделки. Вы можете переключить таймфрейм в модальном окне.`,
+          life: 6000
+        });
+      }
+      
+      tradeCandleData.value = apiData.data;
+    } else {
+      // Если нет данных для таймфрейма бектеста - показываем график без данных
+      // TradeChartModal покажет кнопки для загрузки данных
+      console.warn(`[BacktesterView] No data found for backtest timeframe ${backtestTimeframe}`);
+      
+      safeToast({
+        severity: 'warn',
+        summary: 'Нет данных',
+        detail: `Данные для таймфрейма бектеста (${backtestTimeframe}) отсутствуют. Используйте переключение таймфреймов в графике для загрузки данных.`,
+        life: 6000
+      });
+      
+      tradeCandleData.value = null; // Устанавливаем null, чтобы показать UI загрузки данных
+    }
+    
+  } catch (error) {
+    console.error('[BacktesterView] Error fetching candle data:', error);
+    
+    safeToast({
+      severity: 'error',
+      summary: 'Ошибка загрузки данных',
+      detail: `Не удалось загрузить данные для ${trade.pair}. Используйте переключение таймфреймов в графике.`,
+      life: 5000
+    });
+    
+    // Показываем график без данных
+    tradeCandleData.value = null;
   }
 };
 

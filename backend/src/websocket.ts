@@ -1,11 +1,87 @@
 import WebSocket, { WebSocketServer } from 'ws';
 import { Server as HttpServer } from 'http';
 import logger from '@/utils/logger';
+import zlib from 'zlib';
 // Импортируем необходимые функции из dataController
 import { getSanitizedJobCounts, getJobsWithSanitizedData } from '@/modules/data/dataController'; // Используем корректные экспорты
 
 let wss: WebSocketServer;
 const clients = new Set<WebSocket>();
+
+// Максимальный размер WebSocket сообщения (в символах)
+const MAX_WEBSOCKET_MESSAGE_SIZE = 10 * 1024 * 1024; // Уменьшено до 10MB (было 50MB)
+const LARGE_MESSAGE_THRESHOLD = 5 * 1024 * 1024; // Уменьшено до 5MB (было 10MB) - порог для сжатия
+
+// Функция для сжатия больших данных
+const compressData = (data: any): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const jsonString = JSON.stringify(data);
+    if (jsonString.length < LARGE_MESSAGE_THRESHOLD) {
+      resolve(jsonString);
+      return;
+    }
+
+    zlib.gzip(jsonString, (err, compressed) => {
+      if (err) {
+        logger.error('[WebSocket] Error compressing data:', err);
+        // Fallback: отправляем без сжатия, но с уменьшенными данными
+        const reducedData = reduceDataSize(data);
+        resolve(JSON.stringify(reducedData));
+      } else {
+        const base64Compressed = compressed.toString('base64');
+        resolve(JSON.stringify({
+          _compressed: true,
+          data: base64Compressed,
+          originalSize: jsonString.length,
+          compressedSize: base64Compressed.length
+        }));
+      }
+    });
+  });
+};
+
+// Функция для уменьшения размера данных портфельного бэктеста
+const reduceDataSize = (data: any): any => {
+  if (data.type === 'PORTFOLIO_BACKTEST_COMPLETED' && data.payload?.result) {
+    const result = data.payload.result;
+    const reducedResult = {
+      // Оставляем только основные метрики
+      overallMetrics: result.overallMetrics,
+      
+      // АГРЕССИВНОЕ ограничение сделок - только первые 50 сделок на пару для портфельного
+      tradesByPair: Object.fromEntries(
+        Object.entries(result.tradesByPair || {}).map(([pair, trades]) => [
+          pair,
+          Array.isArray(trades) ? trades.slice(0, 50) : [] // Сильно ограничиваем до первых 50 сделок на пару
+        ])
+      ),
+      
+      metricsByPair: result.metricsByPair,
+      
+      // УБИРАЕМ strategyCandlesByPair для портфельных бэктестов - слишком много данных
+      // strategyCandlesByPair: undefined,
+      
+      _dataReduced: true,
+      _dataReductionLevel: 'aggressive',
+      _originalTradesCount: Object.values(result.tradesByPair || {}).reduce((sum: number, trades: unknown) => {
+        return sum + (Array.isArray(trades) ? trades.length : 0);
+      }, 0),
+      _reducedTradesCount: Object.values(result.tradesByPair || {}).reduce((sum: number, trades: unknown) => {
+        return sum + (Array.isArray(trades) ? Math.min(trades.length, 50) : 0);
+      }, 0),
+      _note: 'Portfolio backtest data reduced for WebSocket transmission. Full results available via API.'
+    };
+
+    return {
+      ...data,
+      payload: {
+        ...data.payload,
+        result: reducedResult
+      }
+    };
+  }
+  return data;
+};
 
 // Helper function to send data safely
 const safeSend = (client: WebSocket, data: any) => {
@@ -19,6 +95,58 @@ const safeSend = (client: WebSocket, data: any) => {
     });
   } else {
       logger.warn('[WebSocket] Attempted to send message to client with readyState:', client.readyState);
+  }
+};
+
+// Безопасная отправка больших данных
+const safeSendLarge = async (client: WebSocket, data: any) => {
+  if (client.readyState !== WebSocket.OPEN) {
+    logger.warn('[WebSocket] Attempted to send large message to client with readyState:', client.readyState);
+    return;
+  }
+
+  try {
+    const compressedData = await compressData(data);
+    
+    if (compressedData.length > MAX_WEBSOCKET_MESSAGE_SIZE) {
+      logger.warn(`[WebSocket] Message too large even after compression (${compressedData.length} chars). Reducing data size.`);
+      const reducedData = reduceDataSize(data);
+      const finalData = JSON.stringify(reducedData);
+      
+      if (finalData.length > MAX_WEBSOCKET_MESSAGE_SIZE) {
+        logger.error(`[WebSocket] Message still too large after reduction (${finalData.length} chars). Skipping send.`);
+        // Отправляем уведомление об ошибке вместо данных
+        safeSend(client, {
+          type: 'WEBSOCKET_ERROR',
+          payload: {
+            message: 'Portfolio backtest results too large to send via WebSocket',
+            suggestion: 'Results saved locally, refresh the page to see them'
+          }
+        });
+        return;
+      }
+      
+      client.send(finalData, (err) => {
+        if (err) {
+          logger.error('[WebSocket] Error sending reduced large message to client:', err);
+        }
+      });
+    } else {
+      client.send(compressedData, (err) => {
+        if (err) {
+          logger.error('[WebSocket] Error sending compressed large message to client:', err);
+        }
+      });
+    }
+  } catch (error: unknown) {
+    logger.error('[WebSocket] Error preparing large message for client:', error);
+    safeSend(client, {
+      type: 'WEBSOCKET_ERROR',
+      payload: {
+        message: 'Error processing portfolio backtest results',
+        error: error instanceof Error ? error.message : String(error)
+      }
+    });
   }
 };
 
@@ -73,38 +201,60 @@ export const initWebSocket = (httpServer: HttpServer) => {
   logger.info('[WebSocket] WebSocket server initialized and attached to HTTP server.');
 };
 
-export const broadcast = (data: any) => {
+export const broadcast = async (data: any) => {
   if (!wss) {
     logger.warn('[WebSocket] Broadcast called before WebSocket server is initialized.');
     return;
   }
-  logger.debug(`[WebSocket] Broadcasting message to ${clients.size} clients: ${JSON.stringify(data)}`); // Логируем перед отправкой
+
+  // Проверяем размер данных перед логированием
+  const dataString = JSON.stringify(data);
+  const dataSizeKB = Math.round(dataString.length / 1024);
+  
+  if (dataSizeKB > 1024) { // Больше 1MB
+    logger.info(`[WebSocket] Broadcasting large message (${dataSizeKB}KB) to ${clients.size} clients. Type: ${data.type}`);
+  } else {
+    logger.debug(`[WebSocket] Broadcasting message to ${clients.size} clients: ${dataString.substring(0, 500)}${dataString.length > 500 ? '...' : ''}`);
+  }
 
   // Сохраняем клиентов, которым не удалось отправить сообщение
   const clientsToRemove = new Set<WebSocket>();
 
+  // Определяем, нужна ли специальная обработка для больших сообщений
+  const isLargeMessage = dataSizeKB > 100; // 100KB порог
+
+  if (isLargeMessage) {
+    logger.info(`[WebSocket] Processing large message (${dataSizeKB}KB) with compression...`);
+    
+    for (const client of clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        await safeSendLarge(client, data);
+      } else {
+        logger.warn(`[WebSocket] Client not open during large broadcast (readyState: ${client.readyState}). Removing client.`);
+        clientsToRemove.add(client);
+      }
+    }
+  } else {
+    // Обычная отправка для небольших сообщений
   clients.forEach(client => {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify(data), (err) => { // Используем JSON.stringify здесь
+        client.send(dataString, (err) => {
         if (err) {
           logger.error('[WebSocket] Error sending broadcast message to a client:', err);
-          // Можно добавить клиента в список на удаление, если отправка не удалась
-          // clientsToRemove.add(client);
         }
       });
     } else {
-        // Если клиент не готов, возможно, его стоит удалить
         logger.warn(`[WebSocket] Client not open during broadcast (readyState: ${client.readyState}). Removing client.`);
         clientsToRemove.add(client);
     }
   });
+  }
 
   // Удаляем клиентов, которым не удалось отправить или которые были не готовы
   clientsToRemove.forEach(client => clients.delete(client));
   if (clientsToRemove.size > 0) {
       logger.info(`[WebSocket] Removed ${clientsToRemove.size} unresponsive clients after broadcast. Total clients: ${clients.size}`);
   }
-
 };
 
 // Опционально: функция для получения количества активных клиентов

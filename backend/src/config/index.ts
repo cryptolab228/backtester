@@ -7,6 +7,8 @@ const isDevelopment = process.env.NODE_ENV === 'development';
 const config = {
   env: process.env.NODE_ENV || 'development',
   port: process.env.PORT || 5000,
+  // Базовый URL для генерации ссылок на статические файлы
+  baseUrl: process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`,
   db: {
     host: isDevelopment && !process.env.DB_HOST ? 'localhost' : (process.env.DB_HOST || 'db'),
     port: parseInt(process.env.DB_PORT || '5432', 10),

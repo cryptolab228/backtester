@@ -182,6 +182,81 @@ export class DataService {
   }
 
   /**
+   * Получает исторические данные свечей в формате API.
+   */
+  async getHistoricalCandles(params: {
+    symbol: string;
+    timeframe: string;
+    startTime?: number;
+    endTime?: number;
+    limit?: number;
+  }): Promise<any[]> {
+    const { symbol, timeframe, startTime, endTime, limit = 1000 } = params;
+    
+    logger.info(`Fetching historical candles for ${symbol} (${timeframe}):`, {
+      startTime: startTime ? new Date(startTime).toISOString() : 'not specified',
+      endTime: endTime ? new Date(endTime).toISOString() : 'not specified',
+      limit
+    });
+
+    try {
+      const tradingPair = await this.pairRepository.findOne({ where: { symbol } });
+      if (!tradingPair) {
+        logger.warn(`Trading pair ${symbol} not found in DB.`);
+        return [];
+      }
+
+      const query = this.candleRepository.createQueryBuilder('candle')
+        .where('candle.pair_id = :pairId', { pairId: tradingPair.id })
+        .andWhere('candle.timeframe = :timeframe', { timeframe });
+
+      if (startTime) {
+        query.andWhere('candle.timestamp >= :startTime', { startTime });
+      }
+      
+      if (endTime) {
+        query.andWhere('candle.timestamp <= :endTime', { endTime });
+      }
+
+      query.orderBy('candle.timestamp', 'ASC')
+        .limit(Math.min(limit, 5000)); // Ограничиваем максимальным количеством
+
+      const candles = await query.getMany();
+      
+      // Преобразуем в формат API (аналогично OKX) с правильными типами данных
+      const formattedCandles = candles.map(candle => ({
+        openTime: Number(candle.timestamp),  // ИСПРАВЛЕНО: timestamp как число
+        open: Number(candle.open),           // ИСПРАВЛЕНО: числовые поля как числа
+        high: Number(candle.high),           // ИСПРАВЛЕНО: числовые поля как числа  
+        low: Number(candle.low),             // ИСПРАВЛЕНО: числовые поля как числа
+        close: Number(candle.close),         // ИСПРАВЛЕНО: числовые поля как числа
+        volume: Number(candle.volume),       // ИСПРАВЛЕНО: числовые поля как числа
+        volumeQuote: Number(candle.volumeQuote || 0), // ИСПРАВЛЕНО: числовые поля как числа
+        timeframe: candle.timeframe
+      }));
+
+      // Логируем первые несколько свечей для диагностики
+      if (formattedCandles.length > 0) {
+        logger.debug(`[DataService] Sample candles for ${symbol} (${timeframe}):`, {
+          first: formattedCandles[0],
+          second: formattedCandles[1] || 'N/A',
+          last: formattedCandles[formattedCandles.length - 1]
+        });
+      }
+
+      logger.info(`Retrieved ${formattedCandles.length} historical candles for ${symbol} (${timeframe})`);
+      return formattedCandles;
+
+    } catch (error: any) {
+      logger.error(`Error fetching historical candles for ${symbol} (${timeframe}): ${error.message}`, { 
+        stack: error.stack,
+        params
+      });
+      return [];
+    }
+  }
+
+  /**
    * Получает торговую пару по символу.
    */
   async getTradingPairBySymbol(symbol: string): Promise<TradingPair | null> {
