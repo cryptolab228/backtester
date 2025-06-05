@@ -80,10 +80,14 @@
             График торговой пары
             <span v-if="isBacktestTimeframe" class="text-sm text-green-600 font-normal ml-2">(Таймфрейм бектеста)</span>
             <span v-else class="text-sm text-orange-600 font-normal ml-2">(Альтернативный таймфрейм)</span>
+            <!-- НОВОЕ: Индикатор режима производительности -->
+            <span v-if="isPerformanceMode" class="text-xs text-blue-600 font-normal ml-2 bg-blue-100 px-2 py-1 rounded">
+              ⚡ Режим производительности
+            </span>
           </h4>
           <div class="flex items-center space-x-2">
             <!-- Выбор таймфрейма -->
-            <Dropdown
+            <Select
               v-model="selectedTimeframe"
               :options="availableTimeframes"
               option-label="label"
@@ -113,7 +117,7 @@
               v-tooltip.bottom="'Загрузить данные для текущего таймфрейма'"
               :loading="isLoadingData"
             />
-            <Dropdown
+            <Select
               v-model="selectedChartType"
               :options="chartTypeOptions"
               option-label="label"
@@ -224,7 +228,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onUnmounted } from 'vue';
+import { ref, computed, watch, onUnmounted } from 'vue';
 import { 
   createChart, 
   ColorType, 
@@ -240,9 +244,10 @@ import type { IChartApi, ISeriesApi, Time } from 'lightweight-charts';
 import Dialog from 'primevue/dialog';
 import Button from 'primevue/button';
 import ProgressSpinner from 'primevue/progressspinner';
-import Dropdown from 'primevue/dropdown';
+import Select from 'primevue/select';
 import type { Trade } from '@/types/strategy';
 import { useToast } from 'primevue/usetoast';
+import { useSettingsStore } from '@/stores/settingsStore';  // НОВОЕ: импорт для доступа к выбранной бирже
 
 interface CandleData {
   timestamp?: number;
@@ -271,6 +276,7 @@ const emit = defineEmits<{
 }>();
 
 const toast = useToast();
+const settingsStore = useSettingsStore();  // НОВОЕ: доступ к настройкам биржи
 
 // TradingView Chart refs
 const chartContainer = ref<HTMLElement | null>(null);
@@ -312,6 +318,11 @@ const availableTimeframes = [
 const currentCandleData = ref<CandleData[] | null>(null);
 const currentTimeframe = ref<string>('1h');
 
+// НОВОЕ: Производительность и оптимизация
+const maxCandlesForRender = ref<number>(5000); // Максимум свечей для рендеринга
+const isPerformanceMode = ref<boolean>(false); // Режим производительности
+const updateDebounceTimer = ref<number | null>(null); // Дебаунсинг обновлений
+
 const isVisible = computed({
   get: () => props.visible,
   set: (value) => emit('update:visible', value)
@@ -351,94 +362,316 @@ const riskRewardRatio = computed(() => {
   return `1:${ratio.toFixed(2)}`;
 });
 
-const createTradingViewChart = async () => {
-  await nextTick();
+// НОВОЕ: Автоматическая настройка производительности
+const optimizePerformance = (dataLength: number) => {
+  if (dataLength > 3000) {
+    isPerformanceMode.value = true;
+    maxCandlesForRender.value = 3000;
+    console.log(`[TradeChart] Performance mode enabled: ${dataLength} candles, limiting to ${maxCandlesForRender.value}`);
+    
+    toast.add({
+      severity: 'info',
+      summary: 'Режим производительности',
+      detail: `Включен режим производительности: отображение ${maxCandlesForRender.value} из ${dataLength} свечей для лучшей скорости рендеринга.`,
+      life: 5000
+    });
+  } else {
+    isPerformanceMode.value = false;
+    maxCandlesForRender.value = 5000;
+  }
+};
   
-  if (!chartContainer.value || !hasChartData.value || !props.trade) return;
-  
-  // Уничтожаем существующий график
-  if (chartInstance.value) {
-    chartInstance.value.remove();
+// Дебаунсинг обновлений графика
+const debouncedChartUpdate = (callback: () => void, delay: number = 300) => {
+  if (updateDebounceTimer.value) {
+    clearTimeout(updateDebounceTimer.value);
   }
   
-  isLoadingChart.value = true;
+  updateDebounceTimer.value = window.setTimeout(() => {
+    callback();
+    updateDebounceTimer.value = null;
+  }, delay);
+};
+
+const createTradingViewChart = () => {
+  if (!chartContainer.value || !currentCandleData.value) {
+    console.warn('[TradeChart] Missing container or data for chart creation');
+    return;
+  }
   
   try {
     console.log(`[TradeChart] Starting chart creation with ${currentCandleData.value!.length} original candles for timeframe ${currentTimeframe.value}`);
 
-    // УЛУЧШЕННАЯ ОЧИСТКА ДАННЫХ с правильной обработкой разных форматов API
-    const rawCandles = currentCandleData.value!;
+    const rawCandles = currentCandleData.value;
+    console.log(`[TradeChart] Processing ${rawCandles.length} raw candles. Sample data:`, rawCandles[0]);
+
+    // НОВОЕ: Оптимизация производительности
+    optimizePerformance(rawCandles.length);
+
+    // УМНАЯ ОБРЕЗКА ДАННЫХ для производительности
+    let processedCandles = rawCandles;
+    if (isPerformanceMode.value && rawCandles.length > maxCandlesForRender.value) {
+      // Функция для получения timestamp из разных форматов
+      const getTimestamp = (candle: any): number => {
+        if (Array.isArray(candle) && candle.length >= 1) {
+          return typeof candle[0] === 'string' ? parseInt(candle[0], 10) : Number(candle[0]);
+        }
+        if (candle.timestamp) return typeof candle.timestamp === 'string' ? parseInt(candle.timestamp, 10) : candle.timestamp;
+        if (candle.openTime) return typeof candle.openTime === 'string' ? parseInt(candle.openTime, 10) : candle.openTime;
+        if (candle.time) return typeof candle.time === 'string' ? parseInt(candle.time, 10) : candle.time;
+        return 0;
+      };
+      
+      // Берем контекст вокруг сделки
+      const entryTime = props.trade?.entryTimestamp || 0;
+      
+      if (entryTime > 0) {
+        // Находим индекс свечи близкой к времени входа
+        let entryIndex = rawCandles.findIndex(candle => {
+          const timestamp = getTimestamp(candle);
+          const adjustedTimestamp = timestamp < 10000000000 ? timestamp * 1000 : timestamp;
+          return adjustedTimestamp >= entryTime;
+        });
+        
+        if (entryIndex === -1) entryIndex = Math.floor(rawCandles.length / 2);
+        
+        // Берем контекст вокруг сделки: 40% до входа, 60% после
+        const beforeCount = Math.floor(maxCandlesForRender.value * 0.4);
+        const afterCount = maxCandlesForRender.value - beforeCount;
+        
+        const startIndex = Math.max(0, entryIndex - beforeCount);
+        const endIndex = Math.min(rawCandles.length, entryIndex + afterCount);
+        
+        processedCandles = rawCandles.slice(startIndex, endIndex);
+        
+        console.log(`[TradeChart] Smart data slicing: ${rawCandles.length} -> ${processedCandles.length} candles around trade (entry at index ${entryIndex})`);
+      } else {
+        // Fallback: берем последние N свечей
+        processedCandles = rawCandles.slice(-maxCandlesForRender.value);
+        console.log(`[TradeChart] Performance mode: using last ${processedCandles.length} candles`);
+      }
+    }
+
+    const normalizedCandles: any[] = [];
     const cleanedCandles: any[] = [];
     const usedTimestamps = new Set<number>();
 
-    console.log(`[TradeChart] Processing ${rawCandles.length} raw candles. Sample data:`, rawCandles[0]);
+    // ОПТИМИЗАЦИЯ: Счетчики ошибок для группировки логов
+    let invalidTimestampCount = 0;
+    let outOfRangeCount = 0;
+    let invalidOHLCCount = 0;
+    let nonPositiveOHLCCount = 0;
+    let invalidOHLCLogicCount = 0;
+    const MAX_WARNING_LOGS = 5; // Максимум 5 warning'ов каждого типа
 
-    // НОРМАЛИЗАЦИЯ ДАННЫХ: Приводим все форматы к единому
-    const normalizedCandles = rawCandles.map((candle, index) => {
-      // ИСПРАВЛЕННАЯ логика определения timestamp из разных возможных полей
+    // Нормализация данных свечей с оптимизированным логированием
+    processedCandles.forEach((candle, index) => {
       let timestamp: number = 0;
       
-      // Пробуем timestamp
+      // ДЕТАЛЬНАЯ ДИАГНОСТИКА: Логируем структуру первых свечей
+      if (index < 5) {
+        console.log(`[TradeChart] Candle ${index} FULL STRUCTURE:`, candle);
+        console.log(`[TradeChart] Candle ${index} keys:`, Object.keys(candle));
+        console.log(`[TradeChart] Candle ${index} values:`, Object.values(candle));
+      }
+
+      // ИСПРАВЛЕННАЯ ЛОГИКА: Данные приходят как массив [timestamp, open, high, low, close, volume, quoteVolume]
+      if (Array.isArray(candle) && candle.length >= 5) {
+        // Формат массива от Bybit API: [timestamp, open, high, low, close, volume, quoteVolume]
+        timestamp = typeof candle[0] === 'string' ? parseInt(candle[0], 10) : Number(candle[0]);
+        
+        if (index < 5) {
+          console.log(`[TradeChart] Array format detected for candle ${index}:`, {
+            timestamp: candle[0],
+            open: candle[1],
+            high: candle[2], 
+            low: candle[3],
+            close: candle[4],
+            volume: candle[5],
+            quoteVolume: candle[6]
+          });
+        }
+      }
+      // Fallback для объектного формата
+      else if (typeof candle === 'object' && !Array.isArray(candle)) {
       if (candle.timestamp) {
         timestamp = typeof candle.timestamp === 'string' ? parseInt(candle.timestamp, 10) : candle.timestamp;
       }
-      // Пробуем openTime (основной формат от бэкенда)
       else if (candle.openTime) {
         timestamp = typeof candle.openTime === 'string' ? parseInt(candle.openTime, 10) : candle.openTime;
       }
-      // Пробуем time (альтернативный формат)
       else if (candle.time) {
         timestamp = typeof candle.time === 'string' ? parseInt(candle.time, 10) : candle.time;
       }
-      
-      if (typeof timestamp !== 'number' || timestamp <= 0) {
-        console.warn(`[TradeChart] Invalid or missing timestamp for candle ${index}:`, candle);
-        return null;
+      else if ((candle as any).open_time) {
+        timestamp = typeof (candle as any).open_time === 'string' ? parseInt((candle as any).open_time, 10) : (candle as any).open_time;
+      }
+      else if ((candle as any).t) {
+        timestamp = typeof (candle as any).t === 'string' ? parseInt((candle as any).t, 10) : (candle as any).t;
+      }
+      else if ((candle as any).ts) {
+        timestamp = typeof (candle as any).ts === 'string' ? parseInt((candle as any).ts, 10) : (candle as any).ts;
+      }
       }
       
-      // Конвертируем в миллисекунды если нужно
+      // ДИАГНОСТИКА: Логируем первые 5 свечей для понимания формата
+      if (index < 5) {
+        console.log(`[TradeChart] Candle ${index} diagnostic:`, {
+          originalCandle: candle,
+          extractedTimestamp: timestamp,
+          isArray: Array.isArray(candle),
+          arrayLength: Array.isArray(candle) ? candle.length : 'not array',
+          timestampFields: Array.isArray(candle) ? 'array format' : {
+            timestamp: candle?.timestamp,
+            openTime: candle?.openTime, 
+            time: candle?.time,
+            open_time: (candle as any)?.open_time,
+            t: (candle as any)?.t,
+            ts: (candle as any)?.ts
+          }
+        });
+      }
+      
+      if (typeof timestamp !== 'number' || timestamp <= 0) {
+        invalidTimestampCount++;
+        if (invalidTimestampCount <= MAX_WARNING_LOGS) {
+          console.warn(`[TradeChart] Invalid or missing timestamp for candle ${index}:`, {
+            candle: candle,
+            extractedTimestamp: timestamp,
+            availableFields: Array.isArray(candle) ? `Array[${candle.length}]` : Object.keys(candle || {}),
+            isArray: Array.isArray(candle),
+            candleType: typeof candle
+          });
+        }
+        return;
+      }
+
+      // ИСПРАВЛЕННАЯ ЛОГИКА: Более гибкая проверка формата timestamp
+      // Если timestamp меньше чем Unix timestamp в секундах начиная с 2020 года
+      const MIN_UNIX_SECONDS_2020 = 1577836800; // 2020-01-01 в секундах
+      
+      if (timestamp < MIN_UNIX_SECONDS_2020) {
+        // Возможно это какой-то другой формат, пропускаем с предупреждением
+        invalidTimestampCount++;
+        if (invalidTimestampCount <= MAX_WARNING_LOGS) {
+          console.warn(`[TradeChart] Timestamp too old (before 2020) for candle ${index}:`, {
+            timestamp,
+            candle
+          });
+        }
+        return;
+      }
+      
+      // Конвертируем в миллисекунды если нужно (если timestamp в секундах)
       if (timestamp < 10000000000) { // Если меньше 10^10, то это секунды
         timestamp = timestamp * 1000;
       }
       
-      // Проверяем что timestamp в разумных пределах (не в далёком прошлом или будущем)
+      // СМЯГЧЕННАЯ ПРОВЕРКА: Проверяем что timestamp в разумных пределах 
       const now = Date.now();
-      const earliestDate = new Date('2020-01-01').getTime();
-      const latestDate = now + 365 * 24 * 60 * 60 * 1000; // Плюс год в будущем
+      const earliestDate = new Date('2015-01-01').getTime(); // Смягчили с 2020 до 2015
+      const latestDate = now + 5 * 365 * 24 * 60 * 60 * 1000; // Плюс 5 лет в будущем (было 1 год)
       
       if (timestamp < earliestDate || timestamp > latestDate) {
+        outOfRangeCount++;
+        if (outOfRangeCount <= MAX_WARNING_LOGS) {
         console.warn(`[TradeChart] Timestamp out of reasonable range for candle ${index}:`, {
           timestamp,
           date: timestamp && timestamp > 0 ? new Date(timestamp).toISOString() : 'Invalid',
-          candle
+            candle,
+            range: {
+              earliest: new Date(earliestDate).toISOString(),
+              latest: new Date(latestDate).toISOString()
+            }
         });
-        return null;
+        }
+        return;
       }
 
-      // Извлекаем OHLC данные с правильной обработкой строк от бэкенда
-      const open = typeof candle.open === 'string' ? parseFloat(candle.open) : Number(candle.open);
-      const high = typeof candle.high === 'string' ? parseFloat(candle.high) : Number(candle.high);  
-      const low = typeof candle.low === 'string' ? parseFloat(candle.low) : Number(candle.low);
-      const close = typeof candle.close === 'string' ? parseFloat(candle.close) : Number(candle.close);
-      const volume = typeof candle.volume === 'string' ? parseFloat(candle.volume) : Number(candle.volume || candle.vol || 0);
+      // ИСПРАВЛЕННАЯ ЛОГИКА: Извлечение OHLC данных из массива или объекта
+      const getNumericValue = (value: any): number => {
+        if (typeof value === 'number') return value;
+        if (typeof value === 'string') {
+          const parsed = parseFloat(value);
+          return isNaN(parsed) ? 0 : parsed;
+        }
+        return 0;
+      };
+
+      let open: number, high: number, low: number, close: number, volume: number;
+
+      if (Array.isArray(candle) && candle.length >= 5) {
+        // Формат массива: [timestamp, open, high, low, close, volume, quoteVolume]
+        open = getNumericValue(candle[1]);
+        high = getNumericValue(candle[2]);  
+        low = getNumericValue(candle[3]);
+        close = getNumericValue(candle[4]);
+        volume = getNumericValue(candle[5] || 0);
+      } else {
+        // Объектный формат
+        open = getNumericValue(candle.open);
+        high = getNumericValue(candle.high);  
+        low = getNumericValue(candle.low);
+        close = getNumericValue(candle.close);
+        volume = getNumericValue(candle.volume || candle.vol || 0);
+      }
+
+      // ДИАГНОСТИКА: Логируем первые 5 свечей после извлечения OHLC
+      if (index < 5) {
+        console.log(`[TradeChart] Candle ${index} OHLC:`, {
+          original: Array.isArray(candle) ? 
+            { timestamp: candle[0], open: candle[1], high: candle[2], low: candle[3], close: candle[4] } :
+            { open: candle?.open, high: candle?.high, low: candle?.low, close: candle?.close },
+          extracted: { open, high, low, close, volume }
+        });
+      }
 
       // Базовая валидация OHLC
       if (isNaN(open) || isNaN(high) || isNaN(low) || isNaN(close)) {
-        console.warn(`[TradeChart] Invalid OHLC values for candle ${index}:`, { open, high, low, close, candle });
-        return null;
+        invalidOHLCCount++;
+        if (invalidOHLCCount <= MAX_WARNING_LOGS) {
+          console.warn(`[TradeChart] Invalid OHLC values for candle ${index}:`, { 
+            open, high, low, close, 
+            originalValues: { open: candle.open, high: candle.high, low: candle.low, close: candle.close },
+            candle 
+          });
+        }
+        return;
       }
 
       if (open <= 0 || high <= 0 || low <= 0 || close <= 0) {
+        nonPositiveOHLCCount++;
+        if (nonPositiveOHLCCount <= MAX_WARNING_LOGS) {
         console.warn(`[TradeChart] Non-positive OHLC values for candle ${index}:`, { open, high, low, close });
-        return null;
+        }
+        return;
       }
 
-      if (high < low || high < Math.max(open, close) || low > Math.min(open, close)) {
-        console.warn(`[TradeChart] Invalid OHLC logic for candle ${index}:`, { open, high, low, close });
-        return null;
+      // СМЯГЧЕННАЯ ЛОГИКА: Более гибкая проверка OHLC логики
+      if (high < low) {
+        invalidOHLCLogicCount++;
+        if (invalidOHLCLogicCount <= MAX_WARNING_LOGS) {
+          console.warn(`[TradeChart] High < Low for candle ${index}:`, { open, high, low, close });
+        }
+        return;
       }
 
-      return {
+      // Более мягкая проверка - позволяем небольшие расхождения из-за округления
+      const tolerance = Math.max(close * 0.0001, 0.0001); // 0.01% или минимум 0.0001
+      if (high < Math.max(open, close) - tolerance || low > Math.min(open, close) + tolerance) {
+        invalidOHLCLogicCount++;
+        if (invalidOHLCLogicCount <= MAX_WARNING_LOGS) {
+          console.warn(`[TradeChart] OHLC logic issue for candle ${index}:`, { 
+            open, high, low, close, 
+            tolerance,
+            highVsMax: high - Math.max(open, close),
+            lowVsMin: low - Math.min(open, close)
+          });
+      }
+        return;
+      }
+
+      normalizedCandles.push({
         timestamp,
         open,
         high, 
@@ -446,8 +679,25 @@ const createTradingViewChart = async () => {
         close,
         volume,
         originalIndex: index
-      };
-    }).filter(candle => candle !== null); // Убираем null значения
+      });
+    });
+
+    // СВОДКА ПО ОШИБКАМ: Логируем общую статистику вместо многих warning'ов
+    if (invalidTimestampCount > MAX_WARNING_LOGS || outOfRangeCount > MAX_WARNING_LOGS || 
+        invalidOHLCCount > MAX_WARNING_LOGS || nonPositiveOHLCCount > MAX_WARNING_LOGS || 
+        invalidOHLCLogicCount > MAX_WARNING_LOGS) {
+      console.warn(`[TradeChart] Data quality summary:`, {
+        totalCandles: rawCandles.length,
+        validCandles: normalizedCandles.length,
+        errors: {
+          invalidTimestamp: invalidTimestampCount,
+          outOfRange: outOfRangeCount,
+          invalidOHLC: invalidOHLCCount,
+          nonPositiveOHLC: nonPositiveOHLCCount,
+          invalidOHLCLogic: invalidOHLCLogicCount
+        }
+      });
+    }
 
     console.log(`[TradeChart] Normalized ${normalizedCandles.length}/${rawCandles.length} candles`);
 
@@ -483,6 +733,7 @@ const createTradingViewChart = async () => {
     }
 
     // НОРМАЛИЗАЦИЯ ВРЕМЕННЫХ МЕТОК и удаление дубликатов
+    let duplicateCount = 0;
     normalizedCandles.forEach((candle, index) => {
       const rawTimestamp = Math.floor(candle.timestamp / 1000); // Конвертируем в секунды
       const normalizedTimestamp = Math.floor(rawTimestamp / timeInterval) * timeInterval;
@@ -501,9 +752,18 @@ const createTradingViewChart = async () => {
           originalIndex: candle.originalIndex
         });
       } else {
+        duplicateCount++;
+        // ОПТИМИЗАЦИЯ: Логируем только первые 5 дубликатов
+        if (duplicateCount <= 5) {
         console.debug(`[TradeChart] Skipping duplicate timestamp: ${normalizedTimestamp} (${normalizedTimestamp > 0 ? new Date(normalizedTimestamp * 1000).toISOString() : 'Invalid'}) at index ${index}`);
+        }
       }
     });
+
+    // Логируем сводку по дубликатам
+    if (duplicateCount > 5) {
+      console.debug(`[TradeChart] Skipped ${duplicateCount} duplicate timestamps (showing first 5)`);
+    }
 
     // Сортируем по времени
     cleanedCandles.sort((a, b) => Number(a.time) - Number(b.time));
@@ -558,14 +818,40 @@ const createTradingViewChart = async () => {
     const minPrice = Math.min(...allPrices);
     const priceRange = maxPrice - minPrice;
     
-    // Динамическая точность в зависимости от диапазона цен
+    // УЛУЧШЕННАЯ система определения точности цен
     let pricePrecision = 4;
-    if (priceRange > 100) pricePrecision = 2;
-    else if (priceRange > 10) pricePrecision = 3;
-    else if (priceRange > 1) pricePrecision = 4;
-    else pricePrecision = 6;
+    let minMove = 0.0001;
     
-    console.log(`[TradeChart] Price range: ${minPrice.toFixed(pricePrecision)} - ${maxPrice.toFixed(pricePrecision)}, precision: ${pricePrecision}`);
+    if (maxPrice >= 1000) {
+      // Для больших цен (>$1000) - меньше знаков после запятой
+      pricePrecision = 2;
+      minMove = 0.01;
+    } else if (maxPrice >= 100) {
+      // Для средних цен ($100-$1000)
+      pricePrecision = 3;
+      minMove = 0.001;
+    } else if (maxPrice >= 10) {
+      // Для цен $10-$100
+      pricePrecision = 4;
+      minMove = 0.0001;
+    } else if (maxPrice >= 1) {
+      // Для цен $1-$10
+      pricePrecision = 5;
+      minMove = 0.00001;
+    } else {
+      // Для мелких цен (<$1) - максимум знаков
+      pricePrecision = 6;
+      minMove = 0.000001;
+    }
+    
+    // Дополнительная проверка по размаху цен
+    if (priceRange < 0.01) {
+      pricePrecision = Math.max(pricePrecision, 6);
+      minMove = 0.000001;
+    } else if (priceRange < 0.1) {
+      pricePrecision = Math.max(pricePrecision, 5);
+      minMove = 0.00001;
+    }
 
     // Подготавливаем данные для TradingView с правильной точностью
     const candleDataFormatted = finalCandles.map(candle => ({
@@ -645,7 +931,7 @@ const createTradingViewChart = async () => {
         priceFormat: {
           type: 'price',
           precision: pricePrecision,
-          minMove: Math.pow(0.1, pricePrecision),
+          minMove: minMove,
         },
       });
       
@@ -664,7 +950,7 @@ const createTradingViewChart = async () => {
         priceFormat: {
           type: 'price',
           precision: pricePrecision,
-          minMove: Math.pow(0.1, pricePrecision),
+          minMove: minMove,
         },
       });
       const lineData = candleDataFormatted.map(candle => ({
@@ -681,7 +967,7 @@ const createTradingViewChart = async () => {
         priceFormat: {
           type: 'price',
           precision: pricePrecision,
-          minMove: Math.pow(0.1, pricePrecision),
+          minMove: minMove,
         },
       });
       const areaData = candleDataFormatted.map(candle => ({
@@ -719,10 +1005,10 @@ const createTradingViewChart = async () => {
     }
 
     // Добавляем линии Stop Loss и Take Profit с правильной точностью
-    addTradeLevelsWithRiskReward(finalCandles, pricePrecision);
+    addTradeLevelsWithRiskReward(finalCandles, pricePrecision, minMove);
 
     // Добавляем маркеры входа/выхода с правильной точностью
-    addTradeArrowsWithLines(finalCandles, pricePrecision);
+    addTradeArrowsWithLines(finalCandles, pricePrecision, minMove);
 
     // Подгоняем масштаб для отображения полного диапазона
     chartInstance.value.timeScale().fitContent();
@@ -741,7 +1027,7 @@ const createTradingViewChart = async () => {
 };
 
 // ПРАВИЛЬНЫЙ МЕТОД - стрелочки через createSeriesMarkers API v5
-const addTradeArrowsWithLines = (cleanedCandles: any[], pricePrecision: number) => {
+const addTradeArrowsWithLines = (cleanedCandles: any[], pricePrecision: number, minMove: number) => {
   if (!chartInstance.value || !props.trade || cleanedCandles.length === 0 || !candlestickSeries.value) return;
 
   try {
@@ -834,24 +1120,24 @@ const addTradeArrowsWithLines = (cleanedCandles: any[], pricePrecision: number) 
       } catch (markerError) {
         console.error('[TradeChart] Error creating series markers:', markerError);
         // Fallback к горизонтальным линиям если маркеры не работают
-        addTradeArrowsAsFallback(cleanedCandles, pricePrecision);
+        addTradeArrowsAsFallback(cleanedCandles, pricePrecision, minMove);
       }
     } else {
       console.warn('[TradeChart] No markers to add');
       // Используем fallback метод
-      addTradeArrowsAsFallback(cleanedCandles, pricePrecision);
+      addTradeArrowsAsFallback(cleanedCandles, pricePrecision, minMove);
     }
 
     console.log('[TradeChart] Trade arrows added successfully');
   } catch (error) {
     console.error('[TradeChart] Error adding trade arrows:', error);
     // Fallback к горизонтальным линиям
-    addTradeArrowsAsFallback(cleanedCandles, pricePrecision);
+    addTradeArrowsAsFallback(cleanedCandles, pricePrecision, minMove);
   }
 };
 
 // Fallback метод с горизонтальными линиями
-const addTradeArrowsAsFallback = (cleanedCandles: any[], pricePrecision: number) => {
+const addTradeArrowsAsFallback = (cleanedCandles: any[], pricePrecision: number, minMove: number) => {
   if (!chartInstance.value || !props.trade || cleanedCandles.length === 0) return;
 
   try {
@@ -869,7 +1155,7 @@ const addTradeArrowsAsFallback = (cleanedCandles: any[], pricePrecision: number)
         priceFormat: {
           type: 'price',
           precision: pricePrecision,
-          minMove: Math.pow(0.1, pricePrecision),
+          minMove: minMove,
         },
       });
 
@@ -894,7 +1180,7 @@ const addTradeArrowsAsFallback = (cleanedCandles: any[], pricePrecision: number)
         priceFormat: {
           type: 'price',
           precision: pricePrecision,
-          minMove: Math.pow(0.1, pricePrecision),
+          minMove: minMove,
         },
       });
 
@@ -914,7 +1200,7 @@ const addTradeArrowsAsFallback = (cleanedCandles: any[], pricePrecision: number)
 };
 
 // Обновленная функция для TP/SL с Risk/Reward
-const addTradeLevelsWithRiskReward = (cleanedCandles: any[], pricePrecision: number) => {
+const addTradeLevelsWithRiskReward = (cleanedCandles: any[], pricePrecision: number, minMove: number) => {
   if (!chartInstance.value || !props.trade || cleanedCandles.length === 0) return;
 
   try {
@@ -947,7 +1233,7 @@ const addTradeLevelsWithRiskReward = (cleanedCandles: any[], pricePrecision: num
           priceFormat: {
             type: 'price',
             precision: pricePrecision,
-            minMove: Math.pow(0.1, pricePrecision),
+            minMove: minMove,
           },
         });
 
@@ -975,7 +1261,7 @@ const addTradeLevelsWithRiskReward = (cleanedCandles: any[], pricePrecision: num
           priceFormat: {
             type: 'price',
             precision: pricePrecision,
-            minMove: Math.pow(0.1, pricePrecision),
+            minMove: minMove,
           },
         });
 
@@ -1068,6 +1354,8 @@ const onTimeframeChange = async () => {
   console.log(`[TradeChartModal] Timeframe changed to: ${selectedTimeframe.value}`);
   currentTimeframe.value = selectedTimeframe.value;
   
+  // НОВОЕ: Дебаунсинг для предотвращения частых обновлений
+  debouncedChartUpdate(async () => {
   // Сбрасываем текущие данные
   currentCandleData.value = null;
   
@@ -1081,6 +1369,7 @@ const onTimeframeChange = async () => {
   
   // Пытаемся загрузить данные для нового таймфрейма
   await loadTimeframeData(selectedTimeframe.value);
+  }, 500); // 500мс дебаунс для смены таймфрейма
 };
 
 // Функция загрузки данных для текущего таймфрейма
@@ -1175,7 +1464,8 @@ const loadTimeframeData = async (timeframe: string) => {
         timeframe: timeframe,
         startTime,
         endTime,
-        limit: limit
+        limit: limit,
+        exchange: settingsStore.selectedExchange || 'bybit'  // НОВОЕ: передаем выбранную биржу
       })
     });
     
@@ -1387,10 +1677,19 @@ watch(() => props.trade, (newTrade) => {
 });
 
 onUnmounted(() => {
+  // Очищаем график
   if (chartInstance.value) {
     chartInstance.value.remove();
+    chartInstance.value = null;
   }
-  window.removeEventListener('resize', handleResize);
+  
+  // НОВОЕ: Очищаем таймеры для предотвращения утечек памяти
+  if (updateDebounceTimer.value) {
+    clearTimeout(updateDebounceTimer.value);
+    updateDebounceTimer.value = null;
+  }
+  
+  console.log('[TradeChartModal] Cleaned up on unmount');
 });
 
 // Универсальная функция для загрузки недостающих данных (использует Bull Queue)
@@ -1529,7 +1828,8 @@ const fetchMissingData = async (symbol: string, timeframe: string) => {
         timeframes: [timeframe], // API ожидает массив timeframes
         startTime: startTime,
         endTime: endTime,
-        limit: 15000 // Увеличенный лимит для массовой загрузки
+        limit: 15000, // Увеличенный лимит для массовой загрузки
+        exchange: settingsStore.selectedExchange || 'bybit'  // НОВОЕ: передаем выбранную биржу
       })
     });
 

@@ -3,11 +3,54 @@
     <Toast /> <!-- Компонент для отображения уведомлений -->
     <h1 class="text-2xl font-semibold mb-6">Data Management</h1>
 
+    <!-- НОВОЕ: Глобальный выбор биржи -->
     <Card class="mb-6">
-      <template #title>Fetch Trading Pairs</template>
+      <template #title>
+        <div class="flex items-center gap-3">
+          <i class="pi pi-building text-xl"></i>
+          Exchange Selection
+        </div>
+      </template>
       <template #content>
-        <p class="mb-4">Fetch the list of available Futures and Swap pairs from OKX and store them in the database.</p>
-        <Button label="Fetch Pairs" icon="pi pi-download" :loading="isFetchingPairs" @click="handleFetchPairs" />
+        <div class="flex flex-col gap-3">
+          <label for="exchange" class="font-medium">Select Exchange:</label>
+          <div class="flex gap-4">
+            <div class="flex align-items-center">
+              <RadioButton v-model="selectedExchange" inputId="okx" name="exchange" value="okx" />
+              <label for="okx" class="ml-2 cursor-pointer">OKX (30 req/s, 300 candles/req)</label>
+            </div>
+            <div class="flex align-items-center">
+              <RadioButton v-model="selectedExchange" inputId="bybit" name="exchange" value="bybit" />
+              <label for="bybit" class="ml-2 cursor-pointer">Bybit (120 req/s, 1000 candles/req) ⚡</label>
+            </div>
+          </div>
+          <small class="text-gray-600">
+            <strong>Performance comparison:</strong> Bybit is ~13x faster due to higher rate limits and larger batch sizes.
+          </small>
+        </div>
+      </template>
+    </Card>
+
+    <Card class="mb-6">
+      <template #title>
+        <div class="flex items-center gap-3">
+          <i class="pi pi-download text-xl"></i>
+          Fetch Trading Pairs
+        </div>
+      </template>
+      <template #content>
+        <p class="mb-4">
+          Fetch the list of available Futures and Swap pairs from <strong>{{ selectedExchange.toUpperCase() }}</strong> and store them in the database.
+        </p>
+        <div class="flex gap-3 items-center">
+          <Button 
+            :label="`Fetch ${selectedExchange.toUpperCase()} Pairs`" 
+            icon="pi pi-download" 
+            :loading="isFetchingPairs" 
+            @click="handleFetchPairs" 
+          />
+          <Badge v-if="selectedExchange === 'bybit'" value="Fast" severity="success" />
+        </div>
         <div v-if="lastFetchPairsJobId" class="mt-3 p-2 bg-blue-50 border border-blue-200 rounded">
           <span class="text-sm">Last job ID: {{ lastFetchPairsJobId }}. 
             <router-link :to="`/queue-manager?jobId=${lastFetchPairsJobId}`" class="text-blue-600 hover:underline">View in Queue Manager</router-link>
@@ -17,22 +60,30 @@
     </Card>
 
     <Card>
-      <template #title>Fetch Historical Candles</template>
+      <template #title>
+        <div class="flex items-center gap-3">
+          <i class="pi pi-chart-line text-xl"></i>
+          Fetch Historical Candles from {{ selectedExchange.toUpperCase() }}
+        </div>
+      </template>
       <template #content>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div class="flex flex-col gap-2">
             <label for="symbol">Symbol</label>
-            <Dropdown 
+            <Select 
               id="symbol" 
               v-model="fetchParams.selectedSymbol" 
               :options="availableSymbols" 
-              optionLabel="symbol" 
-              placeholder="Select a Symbol"
-              showClear
+              option-label="symbol" 
+              :placeholder="`Select a Symbol from ${selectedExchange.toUpperCase()}`"
+              show-clear
               filter 
               class="w-full" 
               :loading="isLoadingSymbols"
             />
+            <small class="text-gray-600">
+              {{ availableSymbols.length }} pairs available from {{ selectedExchange.toUpperCase() }}
+            </small>
           </div>
 
           <div class="flex flex-col gap-2">
@@ -49,12 +100,12 @@
 
           <div class="flex flex-col gap-2">
             <label for="startTime">Start Date (Optional)</label>
-            <Calendar id="startTime" v-model="fetchParams.startTimeDate" showTime hourFormat="24" dateFormat="yy-mm-dd" />
+            <DatePicker id="startTime" v-model="fetchParams.startTimeDate" showTime hourFormat="24" dateFormat="yy-mm-dd" />
           </div>
 
           <div class="flex flex-col gap-2">
             <label for="endTime">End Date (Optional)</label>
-            <Calendar id="endTime" v-model="fetchParams.endTimeDate" showTime hourFormat="24" dateFormat="yy-mm-dd" />
+            <DatePicker id="endTime" v-model="fetchParams.endTimeDate" showTime hourFormat="24" dateFormat="yy-mm-dd" />
           </div>
 
            <div class="flex flex-col gap-2">
@@ -62,8 +113,27 @@
             <InputNumber id="limit" v-model="fetchParams.limit" placeholder="Max candles to fetch" />
           </div>
         </div>
+        
+        <!-- НОВОЕ: Информация о производительности -->
+        <div class="mt-4 p-3 bg-gray-50 border border-gray-200 rounded">
+          <div class="text-sm">
+            <strong>{{ selectedExchange.toUpperCase() }} Performance:</strong>
+            <ul class="list-disc list-inside mt-1 text-gray-700">
+              <li v-if="selectedExchange === 'okx'">30 requests/second, 300 candles per request</li>
+              <li v-if="selectedExchange === 'bybit'">120 requests/second, 1000 candles per request (⚡ 13x faster overall)</li>
+              <li>Estimated time for 3 years of 1h data: {{ getEstimatedTime() }}</li>
+            </ul>
+          </div>
+        </div>
+
         <div class="mt-6">
-           <Button label="Fetch Candles" icon="pi pi-download" :loading="isFetchingCandles" @click="handleFetchCandles" :disabled="!fetchParams.selectedSymbol || !fetchParams.selectedTimeframes || fetchParams.selectedTimeframes.length === 0"/>
+           <Button 
+             :label="`Fetch from ${selectedExchange.toUpperCase()}`" 
+             icon="pi pi-download" 
+             :loading="isFetchingCandles" 
+             @click="handleFetchCandles" 
+             :disabled="!fetchParams.selectedSymbol || !fetchParams.selectedTimeframes || fetchParams.selectedTimeframes.length === 0"
+           />
         </div>
         <div v-if="lastFetchCandlesJobInfo.ids.length > 0" class="mt-3 p-2 bg-green-50 border border-green-200 rounded">
             <p class="text-sm font-medium mb-1">Candle fetch jobs queued ({{lastFetchCandlesJobInfo.succeeded}}/{{lastFetchCandlesJobInfo.attempted}}):</p>
@@ -77,20 +147,20 @@
       </template>
     </Card>
 
-     <!-- TODO: Добавить секцию для отображения статуса задач -->
-
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, onMounted, watch } from 'vue';
 import Button from 'primevue/button';
-import Dropdown from 'primevue/dropdown';
+import Select from 'primevue/select';
 import MultiSelect from 'primevue/multiselect';
-import Calendar from 'primevue/calendar';
+import DatePicker from 'primevue/datepicker';
 import InputNumber from 'primevue/inputnumber';
 import Card from 'primevue/card';
 import Toast from 'primevue/toast';
+import RadioButton from 'primevue/radiobutton';
+import Badge from 'primevue/badge';
 import { useToast } from 'primevue/usetoast';
 import { RouterLink } from 'vue-router'; // Импорт RouterLink
 import { 
@@ -101,6 +171,9 @@ import {
 import type { FetchCandlesParams, TradingPair } from '@/services/apiService';
 
 const toast = useToast();
+
+// НОВОЕ: Состояние выбранной биржи
+const selectedExchange = ref<'okx' | 'bybit'>('bybit'); // По умолчанию Bybit как более быстрый
 
 const isFetchingPairs = ref(false);
 const isFetchingCandles = ref(false);
@@ -125,16 +198,26 @@ const fetchParams = reactive<{
 });
 
 const availableTimeframes = ref([
-    '1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d', '1w', '1M' // OKX формат
+    '1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d', '1w', '1M' // OKX/Bybit формат
 ]);
+
+// НОВОЕ: Функция для времени загрузки
+const getEstimatedTime = (): string => {
+  if (selectedExchange.value === 'bybit') {
+    return '~8 minutes (Bybit: fast)';
+  } else {
+    return '~100 minutes (OKX: slower)';
+  }
+};
 
 const loadAvailableSymbols = async () => {
   isLoadingSymbols.value = true;
   try {
-    availableSymbols.value = await getAvailableTradingPairs();
+    // НОВОЕ: Передаем биржу в параметрах
+    availableSymbols.value = await getAvailableTradingPairs(selectedExchange.value);
     if (availableSymbols.value.length > 0) {
-        // Можно установить значение по умолчанию, если это необходимо
-        // fetchParams.selectedSymbol = availableSymbols.value[0]; 
+        // Очищаем выбранный символ при смене биржи
+        fetchParams.selectedSymbol = null;
     }
   } catch (error: any) {
     toast.add({ severity: 'error', summary: 'Error Loading Symbols', detail: error.message || 'Failed to load trading symbols', life: 3000 });
@@ -142,6 +225,16 @@ const loadAvailableSymbols = async () => {
     isLoadingSymbols.value = false;
   }
 };
+
+// НОВОЕ: Следим за изменением биржи
+watch(selectedExchange, () => {
+  loadAvailableSymbols();
+  // Очищаем состояние при смене биржи
+  lastFetchPairsJobId.value = null;
+  lastFetchCandlesJobInfo.ids = [];
+  lastFetchCandlesJobInfo.attempted = 0;
+  lastFetchCandlesJobInfo.succeeded = 0;
+});
 
 onMounted(() => {
   loadAvailableSymbols();
@@ -151,10 +244,16 @@ const handleFetchPairs = async () => {
   isFetchingPairs.value = true;
   lastFetchPairsJobId.value = null;
   try {
-    const response = await triggerFetchPairsJob();
+    // НОВОЕ: Передаем биржу в запросе
+    const response = await triggerFetchPairsJob(selectedExchange.value);
     if (response.jobId) {
         lastFetchPairsJobId.value = response.jobId;
-        toast.add({ severity: 'success', summary: 'Job Queued', detail: `${response.message} (Job ID: ${response.jobId})`, life: 5000 });
+        toast.add({ 
+          severity: 'success', 
+          summary: 'Job Queued', 
+          detail: `${response.message} (Job ID: ${response.jobId}) for ${selectedExchange.value.toUpperCase()}`, 
+          life: 5000 
+        });
     } else {
         toast.add({ severity: 'warn', summary: 'Job Status Unknown', detail: response.message || 'Fetch pairs job may have been queued, but no ID was returned.', life: 5000 });
     }
@@ -183,6 +282,7 @@ const handleFetchCandles = async () => {
     startTime: fetchParams.startTimeDate ? fetchParams.startTimeDate.getTime() : undefined,
     endTime: fetchParams.endTimeDate ? fetchParams.endTimeDate.getTime() : undefined,
     limit: fetchParams.limit ?? undefined,
+    exchange: selectedExchange.value, // НОВОЕ: Передаем выбранную биржу
   };
 
   try {
@@ -195,7 +295,7 @@ const handleFetchCandles = async () => {
       toast.add({ 
         severity: 'success', 
         summary: 'Jobs Queued', 
-        detail: `${response.message} Queued ${response.totalSuccessfullyQueued}/${response.totalAttempted} jobs.`, 
+        detail: `${response.message} Queued ${response.totalSuccessfullyQueued}/${response.totalAttempted} jobs for ${selectedExchange.value.toUpperCase()}.`, 
         life: 7000 
       });
     } else if (response.jobId) { // Обработка случая, если бэкенд вернул одиночный jobId (для совместимости)

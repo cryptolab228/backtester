@@ -55,7 +55,7 @@
           </div>
           <div class="p-field p-col-12 p-md-6">
             <label for="nweSource">Источник (nwe_src)</label>
-            <Dropdown id="nweSource" v-model="editableSettings.nwe.source" :options="nweSourceOptions" optionLabel="label" optionValue="value" placeholder="Выберите источник" />
+            <Select id="nweSource" v-model="editableSettings.nwe.source" :options="nweSourceOptions" option-label="label" option-value="value" placeholder="Выберите источник" />
           </div>
           <div class="p-field-checkbox p-col-12 p-md-6">
             <Checkbox id="nweRepaint" v-model="editableSettings.nwe.repaint" :binary="true" />
@@ -77,7 +77,7 @@
         <div class="p-fluid p-formgrid p-grid">
           <div class="p-field p-col-12 p-md-4">
               <label for="clusterSource">Источник кластеров</label>
-              <Dropdown id="clusterSource" v-model="editableSettings.clusters.source" :options="clusterSourceOptions" optionLabel="label" optionValue="value" placeholder="Выберите источник" />
+              <Select id="clusterSource" v-model="editableSettings.clusters.source" :options="clusterSourceOptions" option-label="label" option-value="value" placeholder="Выберите источник" />
           </div>
           <div class="p-field p-col-12 p-md-4">
               <label for="clusterMinVolumeThreshold">Множитель порога объема (min_volume_threshold)</label>
@@ -159,7 +159,7 @@ import type { StrategyParameters } from '@/types/strategy';
 import InputNumber from 'primevue/inputnumber';
 import InputText from 'primevue/inputtext';
 import Checkbox from 'primevue/checkbox';
-import Dropdown from 'primevue/dropdown';
+import Select from 'primevue/select';
 import Fieldset from 'primevue/fieldset';
 
 const props = defineProps<{

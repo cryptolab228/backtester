@@ -57,6 +57,7 @@ export interface BacktestRunParameters {
   endDate: string;   // ISO string date
   initialCapital: number;
   strategyParameters: StrategyParameters; 
+  exchange?: string;
 }
 
 export interface Trade {
@@ -146,6 +147,7 @@ export interface PortfolioBacktestRunParameters {
   initialPortfolioCapital: number;
   strategyParameters: StrategyParameters;
   portfolioSettings?: PortfolioSettings;
+  exchange?: string;
 }
 
 export interface PortfolioMetrics {

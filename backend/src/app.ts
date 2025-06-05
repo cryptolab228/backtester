@@ -23,6 +23,7 @@ import dataRoutes from '@/modules/data/dataRoutes'; // Импорт роутов
 import settingsRoutes from '@/modules/settings/settingsRoutes'; // <-- Импорт роутов настроек
 import backtesterRoutes from '@/modules/backtester/backtester.routes'; // <-- Импорт роутов бэктестера
 import statisticsRoutes from '@/modules/statistics/statisticsRoutes'; // <-- Импорт роутов статистики
+import debugRoutes from '@/routes/debugRoutes'; // <-- Импорт роутов диагностики
 import DataController from '@/modules/data/dataController'; // <--- Явный импорт DataController
 
 async function startServer() {
@@ -92,6 +93,9 @@ async function startServer() {
 
     // Подключаем роуты модуля статистики
     app.use('/api/statistics', statisticsRoutes); // <-- Подключение роутов статистики
+
+    // Подключаем роуты диагностики
+    app.use('/api/debug', debugRoutes); // <-- Подключение роутов диагностики
 
     // Статический маршрут для файлов с результатами портфельного бэктестинга
     const staticPath = getPortfolioResultsDirectory();

@@ -1,4 +1,4 @@
-import { Repository } from 'typeorm';
+import { Repository, Between, MoreThanOrEqual, LessThanOrEqual } from 'typeorm';
 import { AppDataSource } from '@/config/dataSource';
 import { TradingPair } from '@/models/TradingPair';
 import { Candle } from '@/models/Candle';
@@ -16,20 +16,26 @@ export class DataService {
 
   /**
    * Сохраняет или обновляет список торговых пар.
-   * Использует 'upsert' для добавления новых или обновления существующих по `symbol`.
+   * Использует 'upsert' для добавления новых или обновления существующих по `symbol` и `exchange`.
    */
-  async saveOrUpdateTradingPairs(pairs: TradingPairInfo[]): Promise<void> {
+  async saveOrUpdateTradingPairs(pairs: TradingPairInfo[], exchange: string = 'okx'): Promise<void> {
     if (!pairs || pairs.length === 0) {
       logger.warn('No trading pairs provided to saveOrUpdateTradingPairs.');
       return;
     }
 
-    logger.info(`Attempting to save/update ${pairs.length} trading pairs...`);
+    logger.info(`Attempting to save/update ${pairs.length} trading pairs for ${exchange}...`);
     try {
-      const result = await this.pairRepository.upsert(pairs, ['symbol']);
-      logger.info(`Successfully saved/updated trading pairs. Upsert result: ${result.identifiers.length} affected.`);
+      // Добавляем exchange ко всем парам
+      const pairsWithExchange = pairs.map(pair => ({
+        ...pair,
+        exchange
+      }));
+      
+      const result = await this.pairRepository.upsert(pairsWithExchange, ['symbol', 'exchange']);
+      logger.info(`Successfully saved/updated trading pairs for ${exchange}. Upsert result: ${result.identifiers.length} affected.`);
     } catch (error) {
-      logger.error('Error saving/updating trading pairs:', error);
+      logger.error(`Error saving/updating trading pairs for ${exchange}:`, error);
       // Можно добавить более специфическую обработку ошибок
     }
   }
@@ -40,27 +46,30 @@ export class DataService {
    * @param symbol - Символ пары (должен существовать в таблице trading_pairs)
    * @param timeframe - Таймфрейм свечей
    * @param candles - Массив данных свечей
+   * @param exchange - Биржа (okx | bybit)
    */
-  async saveCandles(symbol: string, timeframe: string, candles: CandleData[]): Promise<void> {
+  async saveCandles(symbol: string, timeframe: string, candles: CandleData[], exchange: string = 'okx'): Promise<void> {
     if (!candles || candles.length === 0) {
-      logger.debug(`No candles provided to save for ${symbol} (${timeframe}).`);
+      logger.debug(`No candles provided to save for ${symbol} (${timeframe}) from ${exchange}.`);
       return;
     }
 
-    logger.info(`Attempting to save ${candles.length} candles for ${symbol} (${timeframe})...`);
+    logger.info(`Attempting to save ${candles.length} candles for ${symbol} (${timeframe}) from ${exchange}...`);
 
     try {
-      // Находим ID пары по символу
-      logger.debug(`[DataService] Looking up trading pair for symbol: ${symbol}`);
-      const tradingPair = await this.pairRepository.findOne({ where: { symbol } });
+      // Находим ID пары по символу и бирже
+      logger.debug(`[DataService] Looking up trading pair for symbol: ${symbol} on ${exchange}`);
+      const tradingPair = await this.pairRepository.findOne({ 
+        where: { symbol, exchange } 
+      });
       if (!tradingPair) {
-        logger.error(`Trading pair with symbol ${symbol} not found. Cannot save candles.`);
+        logger.error(`Trading pair with symbol ${symbol} on ${exchange} not found. Cannot save candles.`);
         return;
       }
-      logger.debug(`[DataService] Found trading pair ID ${tradingPair.id} for symbol ${symbol}`);
+      logger.debug(`[DataService] Found trading pair ID ${tradingPair.id} for symbol ${symbol} on ${exchange}`);
 
       // Подготавливаем данные для вставки
-      logger.debug(`[DataService] Preparing ${candles.length} candle entities for ${symbol} (${timeframe})`);
+      logger.debug(`[DataService] Preparing ${candles.length} candle entities for ${symbol} (${timeframe}) from ${exchange}`);
       const candleEntities = candles.map(c => ({
         tradingPair: tradingPair, // Связываем с найденной парой
         timestamp: c.timestamp,
@@ -81,7 +90,7 @@ export class DataService {
       for (let i = 0; i < candleEntities.length; i += chunkSize) {
         const chunkIndex = i / chunkSize + 1;
         const chunk = candleEntities.slice(i, i + chunkSize);
-        logger.debug(`[DataService] Processing chunk ${chunkIndex}/${totalChunks}: ${chunk.length} candles for ${symbol} (${timeframe})`);
+        logger.debug(`[DataService] Processing chunk ${chunkIndex}/${totalChunks}: ${chunk.length} candles for ${symbol} (${timeframe}) from ${exchange}`);
         
         try {
           // Добавляем таймаут для предотвращения зависания
@@ -101,21 +110,22 @@ export class DataService {
             )
           ]);
 
-          logger.debug(`[DataService] Successfully processed chunk ${chunkIndex}/${totalChunks} for ${symbol} (${timeframe})`);
+          logger.debug(`[DataService] Successfully processed chunk ${chunkIndex}/${totalChunks} for ${symbol} (${timeframe}) from ${exchange}`);
         } catch (chunkError: any) {
-          logger.error(`[DataService] Error processing chunk ${chunkIndex}/${totalChunks} for ${symbol} (${timeframe}): ${chunkError.message}`);
+          logger.error(`[DataService] Error processing chunk ${chunkIndex}/${totalChunks} for ${symbol} (${timeframe}) from ${exchange}: ${chunkError.message}`);
           // Не прерываем весь процесс из-за одного чанка, продолжаем с остальными
           continue;
         }
       }
 
-      logger.info(`Successfully processed ${candles.length} candles for ${symbol} (${timeframe}). Duplicates (if any) were ignored.`);
+      logger.info(`Successfully processed ${candles.length} candles for ${symbol} (${timeframe}) from ${exchange}. Duplicates (if any) were ignored.`);
 
     } catch (error: any) {
-      logger.error(`Error saving candles for ${symbol} (${timeframe}): ${error.message}`, { 
+      logger.error(`Error saving candles for ${symbol} (${timeframe}) from ${exchange}: ${error.message}`, { 
         stack: error.stack,
         symbol,
         timeframe,
+        exchange,
         candleCount: candles.length 
       });
       throw error; // Перебрасываем ошибку наверх для обработки в воркере
@@ -129,54 +139,74 @@ export class DataService {
         symbol: string,
         timeframe: string,
         startTime?: number,
-        endTime?: number
+        endTime?: number,
+        exchange?: string
     ): Promise<Candle[]> {
-        logger.info(`Fetching candles from DB for ${symbol} (${timeframe}) between ${startTime ? new Date(startTime) : ''} and ${endTime ? new Date(endTime) : ''}`);
+        logger.info(`Fetching candles from DB for ${symbol} (${timeframe}) from ${exchange || 'any exchange'} between ${startTime ? new Date(startTime) : ''} and ${endTime ? new Date(endTime) : ''}`);
 
-        const tradingPair = await this.pairRepository.findOne({ where: { symbol } });
+        // Строим условие поиска пары
+        const whereCondition: any = { symbol };
+        if (exchange) {
+          whereCondition.exchange = exchange;
+        }
+
+        const tradingPair = await this.pairRepository.findOne({ where: whereCondition });
         if (!tradingPair) {
-            logger.warn(`Trading pair ${symbol} not found in DB.`);
+            logger.warn(`Trading pair ${symbol}${exchange ? ` on ${exchange}` : ''} not found in DB.`);
             return [];
         }
 
-        const query = this.candleRepository.createQueryBuilder('candle')
-            .where('candle.pair_id = :pairId', { pairId: tradingPair.id })
-            .andWhere('candle.timeframe = :timeframe', { timeframe });
-
-        if (startTime) {
-            query.andWhere('candle.timestamp >= :startTime', { startTime });
-        }
-        if (endTime) {
-            query.andWhere('candle.timestamp <= :endTime', { endTime });
-        }
-
-        query.orderBy('candle.timestamp', 'ASC'); // Сортируем по времени
-
+        // ИСПРАВЛЕНО: Используем Repository.find() для применения ValueTransformers
         try {
-            const candles = await query.getMany();
-            logger.info(`Fetched ${candles.length} candles from DB for ${symbol} (${timeframe}).`);
+            const whereConditions: any = {
+                tradingPair: { id: tradingPair.id }, // Правильное имя связи
+                timeframe: timeframe
+            };
+
+            // Добавляем временные условия (PostgreSQL синтаксис)
+            if (startTime && endTime) {
+                whereConditions.timestamp = Between(startTime, endTime);
+            } else if (startTime) {
+                whereConditions.timestamp = MoreThanOrEqual(startTime);
+            } else if (endTime) {
+                whereConditions.timestamp = LessThanOrEqual(endTime);
+            }
+
+            const candles = await this.candleRepository.find({
+                where: whereConditions,
+                order: {
+                    timestamp: 'ASC'
+                },
+                relations: ['tradingPair'] // Правильное имя связи
+            });
+
+            logger.info(`Fetched ${candles.length} candles from DB for ${symbol} (${timeframe}) from ${exchange || 'any exchange'} using Repository.find() with ValueTransformers.`);
             return candles;
         } catch (error) {
-            logger.error(`Error fetching candles from DB for ${symbol} (${timeframe}):`, error);
+            logger.error(`Error fetching candles from DB for ${symbol} (${timeframe}) from ${exchange || 'any exchange'}:`, error);
             return [];
         }
     }
 
   /**
-   * Получает все торговые пары из базы данных.
+   * Получает все торговые пары из базы данных с возможностью фильтрации по бирже.
    */
-  async getAllTradingPairs(): Promise<TradingPair[]> {
-    logger.info('Fetching all trading pairs from DB...');
+  async getAllTradingPairs(exchange?: string): Promise<TradingPair[]> {
+    logger.info(`Fetching all trading pairs from DB${exchange ? ` for ${exchange}` : ''}...`);
     try {
+      const whereCondition = exchange ? { exchange } : {};
+      
       const pairs = await this.pairRepository.find({
+        where: whereCondition,
         order: {
-          symbol: 'ASC' // Сортируем по символу для единообразия
+          exchange: 'ASC',
+          symbol: 'ASC' // Сортируем сначала по бирже, потом по символу
         }
       });
-      logger.info(`Fetched ${pairs.length} trading pairs from DB.`);
+      logger.info(`Fetched ${pairs.length} trading pairs from DB${exchange ? ` for ${exchange}` : ''}.`);
       return pairs;
     } catch (error) {
-      logger.error('Error fetching all trading pairs from DB:', error);
+      logger.error(`Error fetching all trading pairs from DB${exchange ? ` for ${exchange}` : ''}:`, error);
       return []; // Возвращаем пустой массив в случае ошибки
     }
   }
@@ -190,92 +220,88 @@ export class DataService {
     startTime?: number;
     endTime?: number;
     limit?: number;
+    exchange?: string;
   }): Promise<any[]> {
-    const { symbol, timeframe, startTime, endTime, limit = 1000 } = params;
+    const { symbol, timeframe, startTime, endTime, limit, exchange } = params;
     
-    logger.info(`Fetching historical candles for ${symbol} (${timeframe}):`, {
+    logger.info(`Fetching historical candles for ${symbol} (${timeframe}) from ${exchange || 'any exchange'}:`, {
       startTime: startTime ? new Date(startTime).toISOString() : 'not specified',
       endTime: endTime ? new Date(endTime).toISOString() : 'not specified',
       limit
     });
 
     try {
-      const tradingPair = await this.pairRepository.findOne({ where: { symbol } });
-      if (!tradingPair) {
-        logger.warn(`Trading pair ${symbol} not found in DB.`);
+      const candles = await this.getCandles(symbol, timeframe, startTime, endTime, exchange);
+      
+      if (candles.length === 0) {
+        logger.warn(`No candles found for ${symbol} (${timeframe}) from ${exchange || 'any exchange'}`);
         return [];
       }
 
-      const query = this.candleRepository.createQueryBuilder('candle')
-        .where('candle.pair_id = :pairId', { pairId: tradingPair.id })
-        .andWhere('candle.timeframe = :timeframe', { timeframe });
+      // ИСПРАВЛЕНО: Применяем лимит с учетом временного диапазона
+      let limitedCandles: any[];
 
-      if (startTime) {
-        query.andWhere('candle.timestamp >= :startTime', { startTime });
+      if (limit && candles.length > limit) {
+        // Если указаны временные рамки (startTime/endTime), приоритет отдаем данным в этом диапазоне
+        if (startTime || endTime) {
+          // Берем данные с начала диапазона (самые ранние)
+          limitedCandles = candles.slice(0, limit);
+          logger.info(`Applied limit ${limit} from start of time range for ${symbol} (${timeframe}). Showing earliest data.`);
+        } else {
+          // Если временной диапазон не указан, берем последние данные (как раньше)
+          limitedCandles = candles.slice(-limit);
+          logger.info(`Applied limit ${limit} from end (latest data) for ${symbol} (${timeframe}).`);
+        }
+      } else {
+        limitedCandles = candles;
       }
       
-      if (endTime) {
-        query.andWhere('candle.timestamp <= :endTime', { endTime });
-      }
+      // Конвертируем в формат API
+      const result = limitedCandles.map(candle => [
+        candle.timestamp.toString(),
+        candle.open.toString(),
+        candle.high.toString(),
+        candle.low.toString(),
+        candle.close.toString(),
+        candle.volume.toString(),
+        candle.volumeQuote?.toString() || '0'
+      ]);
 
-      query.orderBy('candle.timestamp', 'ASC')
-        .limit(Math.min(limit, 5000)); // Ограничиваем максимальным количеством
-
-      const candles = await query.getMany();
-      
-      // Преобразуем в формат API (аналогично OKX) с правильными типами данных
-      const formattedCandles = candles.map(candle => ({
-        openTime: Number(candle.timestamp),  // ИСПРАВЛЕНО: timestamp как число
-        open: Number(candle.open),           // ИСПРАВЛЕНО: числовые поля как числа
-        high: Number(candle.high),           // ИСПРАВЛЕНО: числовые поля как числа  
-        low: Number(candle.low),             // ИСПРАВЛЕНО: числовые поля как числа
-        close: Number(candle.close),         // ИСПРАВЛЕНО: числовые поля как числа
-        volume: Number(candle.volume),       // ИСПРАВЛЕНО: числовые поля как числа
-        volumeQuote: Number(candle.volumeQuote || 0), // ИСПРАВЛЕНО: числовые поля как числа
-        timeframe: candle.timeframe
-      }));
-
-      // Логируем первые несколько свечей для диагностики
-      if (formattedCandles.length > 0) {
-        logger.debug(`[DataService] Sample candles for ${symbol} (${timeframe}):`, {
-          first: formattedCandles[0],
-          second: formattedCandles[1] || 'N/A',
-          last: formattedCandles[formattedCandles.length - 1]
-        });
-      }
-
-      logger.info(`Retrieved ${formattedCandles.length} historical candles for ${symbol} (${timeframe})`);
-      return formattedCandles;
+      logger.info(`Returning ${result.length} historical candles for ${symbol} (${timeframe}) from ${exchange || 'any exchange'}`);
+      return result;
 
     } catch (error: any) {
-      logger.error(`Error fetching historical candles for ${symbol} (${timeframe}): ${error.message}`, { 
-        stack: error.stack,
-        params
-      });
+      logger.error(`Error fetching historical candles for ${symbol} (${timeframe}) from ${exchange || 'any exchange'}:`, error);
       return [];
     }
   }
 
   /**
-   * Получает торговую пару по символу.
+   * Получает торговую пару по символу и (опционально) бирже.
    */
-  async getTradingPairBySymbol(symbol: string): Promise<TradingPair | null> {
-    logger.debug(`Fetching trading pair by symbol from DB: ${symbol}`);
+  async getTradingPairBySymbol(symbol: string, exchange?: string): Promise<TradingPair | null> {
+    logger.debug(`Looking up trading pair for symbol: ${symbol}${exchange ? ` on ${exchange}` : ''}`);
+    
     try {
-      const pair = await this.pairRepository.findOne({ where: { symbol } });
-      if (pair) {
-        logger.debug(`Trading pair ${symbol} found in DB.`);
-      } else {
-        logger.debug(`Trading pair ${symbol} not found in DB.`);
+      const whereCondition: any = { symbol };
+      if (exchange) {
+        whereCondition.exchange = exchange;
       }
-      return pair;
+      
+      const tradingPair = await this.pairRepository.findOne({ where: whereCondition });
+      
+      if (tradingPair) {
+        logger.debug(`Found trading pair ID ${tradingPair.id} for symbol ${symbol}${exchange ? ` on ${exchange}` : ''}`);
+      } else {
+        logger.debug(`Trading pair ${symbol}${exchange ? ` on ${exchange}` : ''} not found`);
+      }
+      
+      return tradingPair;
     } catch (error) {
-      logger.error(`Error fetching trading pair ${symbol} from DB:`, error);
+      logger.error(`Error looking up trading pair ${symbol}${exchange ? ` on ${exchange}` : ''}:`, error);
       return null;
     }
   }
-
-   // Можно добавить другие методы, например, для получения последней свечи и т.д.
 }
 
 // Экспортируем инстанс сервиса для удобства использования

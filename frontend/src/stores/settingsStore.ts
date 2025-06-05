@@ -3,7 +3,7 @@ import { defineStore } from 'pinia';
 // import type { Ref } from 'vue'; // <-- Удаляем неиспользуемый импорт
 // import { apiClient } from '@/services/apiService'; // Больше не нужен для этого стора
 import type { StrategyParameters } from '@/types/strategy';
-import { getTradingPairs } from '@/services/apiService'; // <-- Импорт
+import { getAvailableTradingPairs } from '@/services/apiService'; // <-- Импорт без getTradingPairs
 
 const STRATEGY_PARAMS_LOCAL_STORAGE_KEY = 'strategyParameters';
 
@@ -16,6 +16,7 @@ export interface SettingsState {
   isLoading: boolean;
   error: string | null;
   availableTradingPairs: TradingPairItem[]; // <-- Новое состояние
+  selectedExchange: 'okx' | 'bybit'; // НОВОЕ: выбранная биржа
 }
 
 // Состояние по умолчанию для параметров стратегии
@@ -131,6 +132,7 @@ export const useSettingsStore = defineStore('settings', {
       isLoading: false,
       error: null,
       availableTradingPairs: [], // <-- Инициализация нового состояния
+      selectedExchange: 'bybit', // НОВОЕ: по умолчанию Bybit как более быстрый
     };
   },
   getters: {
@@ -185,26 +187,74 @@ export const useSettingsStore = defineStore('settings', {
       localStorage.setItem(STRATEGY_PARAMS_LOCAL_STORAGE_KEY, JSON.stringify(this.parameters));
       console.log('Strategy parameters reset to defaults.');
     },
-    // Новое действие для загрузки торговых пар
-    async fetchAvailableTradingPairs() {
-      if (this.availableTradingPairs.length > 0) {
-        // Опционально: не перезагружать, если уже есть данные
-        // console.log('Trading pairs already loaded.');
-        // return;
+    // НОВОЕ: действие для смены биржи с оптимизацией
+    setExchange(exchange: 'okx' | 'bybit') {
+      if (this.selectedExchange === exchange) {
+        return; // Нет необходимости менять если биржа та же
       }
+      
+      const previousExchange = this.selectedExchange;
+      this.selectedExchange = exchange;
+      
+      // Очищаем текущие торговые пары
+      this.availableTradingPairs = [];
+      
+      console.log(`Exchange changed from ${previousExchange} to ${exchange}`);
+      
+      // Асинхронно загружаем пары для новой биржи с проверкой кэша
+      this.fetchAvailableTradingPairs();
+    },
+    
+    // Обновленное действие для загрузки торговых пар с поддержкой биржи и кэширования
+    async fetchAvailableTradingPairs(forceReload: boolean = false) {
+      // Проверяем кэш с учетом биржи
+      const cacheKey = `trading_pairs_${this.selectedExchange}`;
+      const cachedData = localStorage.getItem(cacheKey);
+      const cacheExpiry = localStorage.getItem(`${cacheKey}_expiry`);
+      
+      if (!forceReload && cachedData && cacheExpiry) {
+        const isExpired = Date.now() > parseInt(cacheExpiry);
+        if (!isExpired) {
+          try {
+            this.availableTradingPairs = JSON.parse(cachedData);
+            console.log(`Trading pairs loaded from cache for ${this.selectedExchange}:`, this.availableTradingPairs.length, 'pairs');
+            return;
+          } catch (error) {
+            console.warn('Failed to parse cached trading pairs, fetching fresh data');
+          }
+        }
+      }
+      
+      if (this.availableTradingPairs.length > 0 && !forceReload) {
+        console.log('Trading pairs already loaded for', this.selectedExchange);
+        return;
+      }
+      
       this.isLoading = true;
       this.error = null;
       try {
-        const pairsFromApi = await getTradingPairs(); // { id: number, symbol: string }[]
+        console.log(`Fetching trading pairs for ${this.selectedExchange}...`);
+        const pairsFromApi = await getAvailableTradingPairs(this.selectedExchange);
+        
         this.availableTradingPairs = pairsFromApi.map(p => ({
           label: p.symbol, // Отображаемый текст
           value: p.symbol  // Значение, которое будет использоваться в v-model
         }));
-        console.log('Available trading pairs loaded:', this.availableTradingPairs);
+        
+        // Кэшируем данные на 10 минут
+        const expiryTime = Date.now() + (10 * 60 * 1000);
+        localStorage.setItem(cacheKey, JSON.stringify(this.availableTradingPairs));
+        localStorage.setItem(`${cacheKey}_expiry`, expiryTime.toString());
+        
+        console.log(`Available trading pairs loaded for ${this.selectedExchange}:`, this.availableTradingPairs.length, 'pairs');
       } catch (err: any) {
         this.error = err.message || 'Failed to fetch trading pairs';
         console.error('Error fetching trading pairs:', this.error);
         this.availableTradingPairs = []; // Очищаем в случае ошибки
+        
+        // Очищаем кэш при ошибке
+        localStorage.removeItem(cacheKey);
+        localStorage.removeItem(`${cacheKey}_expiry`);
       }
       this.isLoading = false;
     }

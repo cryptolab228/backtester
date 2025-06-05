@@ -174,6 +174,120 @@ export async function validateTradingPair(symbol: string): Promise<boolean> {
 }
 
 /**
+ * Получает информацию о доступном диапазоне торговли для символа в OKX
+ * Возвращает дату начала торговли и текущую дату
+ */
+export async function getTradingDateRange(symbol: string): Promise<{ startTime: number | null; endTime: number; launchTime?: number }> {
+  try {
+    // 1. Получаем listTime из instruments API
+    const url = `${BASE_URL}/api/v5/public/instruments`;
+    
+    // Определяем тип инструмента по символу
+    let instType = '';
+    if (symbol.includes('-SWAP')) {
+      instType = 'SWAP';
+    } else if (symbol.match(/-\d{6}$/)) {
+      instType = 'FUTURES';
+    } else {
+      logger.warn(`[getTradingDateRange] Cannot determine instrument type for ${symbol}`);
+      return { startTime: null, endTime: Date.now() };
+    }
+    
+    const params = { instType };
+    const response = await axios.get<OkxInstrumentsResponse>(url, { params });
+    
+    let launchTime: number | undefined;
+    
+    if (response.data && response.data.code === '0') {
+      const instrument = response.data.data.find(inst => inst.instId === symbol);
+      if (instrument && instrument.listTime) {
+        launchTime = parseInt(instrument.listTime);
+        logger.debug(`[getTradingDateRange] ${symbol} listTime from API: ${new Date(launchTime).toISOString()}`);
+      }
+    }
+    
+    // 2. Если listTime недоступен, пробуем получить первую свечу через исторические данные  
+    let firstAvailableTime: number | null = null;
+    
+    if (!launchTime) {
+      try {
+        // Используем очень раннюю дату как начальную точку для поиска первой свечи
+        const veryEarlyDate = new Date('2017-01-01').getTime();
+        const recentDate = Date.now();
+        
+        const candleUrl = `${BASE_URL}/api/v5/market/history-candles`;
+        const candleParams = {
+          instId: symbol,
+          bar: '1D', // Используем дневные свечи для определения начала
+          after: recentDate,
+          limit: 100, // Максимум для одного запроса
+        };
+        
+        // Пытаемся получить старые данные, идя назад во времени
+        let allCandles: { timestamp: number }[] = [];
+        let currentAfter = recentDate;
+        let attempts = 0;
+        const maxAttempts = 10; // Ограничиваем количество запросов
+        
+        while (attempts < maxAttempts) {
+          const candleResponse = await axios.get<OkxCandleResponse>(candleUrl, { 
+            params: { ...candleParams, after: currentAfter }
+          });
+          await delay(250); // Respect rate limits
+          
+          if (candleResponse.data && candleResponse.data.code === '0' && candleResponse.data.data.length > 0) {
+            const batchCandles = candleResponse.data.data.map(c => ({
+              timestamp: parseInt(c[0], 10)
+            }));
+            
+            allCandles.unshift(...batchCandles.reverse()); // Добавляем в правильном порядке
+            
+            // Берем самую старую свечу из этой пачки для следующего запроса
+            const oldestTimestamp = parseInt(candleResponse.data.data[candleResponse.data.data.length - 1][0], 10);
+            
+            // Если мы достигли очень раннюю дату или получили меньше данных чем ожидали
+            if (oldestTimestamp <= veryEarlyDate || candleResponse.data.data.length < 100) {
+              break;
+            }
+            
+            currentAfter = oldestTimestamp;
+            attempts++;
+          } else {
+            break;
+          }
+        }
+        
+        if (allCandles.length > 0) {
+          firstAvailableTime = allCandles[0].timestamp;
+          logger.debug(`[getTradingDateRange] ${symbol} first available candle from historical data: ${new Date(firstAvailableTime).toISOString()}`);
+        }
+        
+      } catch (candleError: any) {
+        logger.warn(`[getTradingDateRange] Could not get first candle for ${symbol}: ${candleError.message}`);
+      }
+    }
+    
+    const endTime = Date.now();
+    const startTime = launchTime || firstAvailableTime;
+    
+    logger.info(`[getTradingDateRange] ${symbol} trading range: ${startTime ? new Date(startTime).toISOString() : 'unknown'} to ${new Date(endTime).toISOString()}`);
+    
+    return {
+      startTime,
+      endTime,
+      launchTime
+    };
+    
+  } catch (error: any) {
+    logger.error(`[getTradingDateRange] Error getting trading range for ${symbol}:`, error.message || error);
+    return {
+      startTime: null,
+      endTime: Date.now()
+    };
+  }
+}
+
+/**
  * Получает исторические свечи для указанного символа и таймфрейма.
  * Автоматически обрабатывает пагинацию и Rate Limits OKX (100 свечей за раз, лимит запросов).
  * @param symbol - ID инструмента (например, BTC-USDT-SWAP)

@@ -117,13 +117,19 @@ class DataController {
    */
   async triggerFetchPairs(req: Request, res: Response): Promise<void> {
     try {
-      logger.info(`[Controller] Attempting to add job ${JOB_TYPES.FETCH_PAIRS}...`);
-      const job = await dataQueue.add(JOB_TYPES.FETCH_PAIRS, {});
+      const { exchange = 'okx' } = req.body;  // НОВОЕ: поддержка биржи
+      
+      logger.info(`[Controller] Attempting to add job ${JOB_TYPES.FETCH_PAIRS} for exchange: ${exchange}...`);
+      const job = await dataQueue.add(JOB_TYPES.FETCH_PAIRS, { exchange });
       logger.info(`[Controller] dataQueue.add call completed for ${JOB_TYPES.FETCH_PAIRS}. Returned job object: ${JSON.stringify(job)}`);
 
       if (job && job.id) {
-        logger.info(`[Controller] Successfully added job ${JOB_TYPES.FETCH_PAIRS} with ID: ${job.id} to the queue.`);
-        res.status(202).json({ message: 'Fetch pairs job added to the queue.', jobId: job.id });
+        logger.info(`[Controller] Successfully added job ${JOB_TYPES.FETCH_PAIRS} with ID: ${job.id} to the queue for ${exchange}.`);
+        res.status(202).json({ 
+          message: `Fetch pairs job added to the queue for ${exchange}.`, 
+          jobId: job.id,
+          exchange 
+        });
       } else {
         logger.error(`[Controller] dataQueue.add for ${JOB_TYPES.FETCH_PAIRS} returned an unexpected result. Job object: ${JSON.stringify(job)}`);
         res.status(500).json({ message: 'Failed to add fetch pairs job due to unexpected queue response.' });
@@ -138,11 +144,11 @@ class DataController {
 
   /**
    * Добавляет задачу на получение исторических свечей.
-   * Принимает параметры из тела запроса: symbol, timeframes (массив строк), startTime?, endTime?, limit?
+   * Принимает параметры из тела запроса: symbol, timeframes (массив строк), startTime?, endTime?, limit?, exchange?
    */
   async triggerFetchCandles(req: Request, res: Response): Promise<void> {
     logger.info(`[Controller] Received request to fetch candles. Body: ${JSON.stringify(req.body)}`);
-    const { symbol, timeframes, startTime, endTime, limit } = req.body;
+    const { symbol, timeframes, startTime, endTime, limit, exchange = 'okx' } = req.body;  // НОВОЕ: поддержка биржи
 
     if (!symbol || !timeframes || !Array.isArray(timeframes) || timeframes.length === 0) {
       res.status(400).json({ message: 'Missing or invalid required parameters: symbol (string) and timeframes (non-empty array of strings).' });
@@ -154,7 +160,7 @@ class DataController {
 
     for (const timeframe of timeframes) {
       if (typeof timeframe !== 'string' || timeframe.trim() === '') {
-        logger.warn(`[Controller] Invalid timeframe value "${timeframe}" for symbol ${symbol}. Skipping.`);
+        logger.warn(`[Controller] Invalid timeframe value "${timeframe}" for symbol ${symbol} on ${exchange}. Skipping.`);
         continue; 
       }
 
@@ -164,19 +170,20 @@ class DataController {
         startTime: startTime ? parseInt(startTime, 10) : undefined,
         endTime: endTime ? parseInt(endTime, 10) : undefined,
         limit: limit ? parseInt(limit, 10) : undefined,
+        exchange,  // НОВОЕ: добавляем биржу в данные задачи
       };
 
       try {
-        logger.info(`[Controller] Attempting to add job ${JOB_TYPES.FETCH_CANDLES} for ${symbol} (${jobData.timeframe}) with data: ${JSON.stringify(jobData)}.`);
+        logger.info(`[Controller] Attempting to add job ${JOB_TYPES.FETCH_CANDLES} for ${symbol} (${jobData.timeframe}) on ${exchange} with data: ${JSON.stringify(jobData)}.`);
         const jobPromise = dataQueue.add(JOB_TYPES.FETCH_CANDLES, jobData);
         jobPromises.push(jobPromise);
       } catch (error: any) {
-        logger.error(`[Controller] Error synchronously adding job ${JOB_TYPES.FETCH_CANDLES} for ${symbol} (${jobData.timeframe}): ${error.message}`, { stack: error.stack, jobData });
+        logger.error(`[Controller] Error synchronously adding job ${JOB_TYPES.FETCH_CANDLES} for ${symbol} (${jobData.timeframe}) on ${exchange}: ${error.message}`, { stack: error.stack, jobData });
       }
     }
 
     if (jobPromises.length === 0 && timeframes.length > 0) {
-        logger.warn(`[Controller] No valid timeframes provided for symbol ${symbol} after filtering. Request body: ${JSON.stringify(req.body)}`);
+        logger.warn(`[Controller] No valid timeframes provided for symbol ${symbol} on ${exchange} after filtering. Request body: ${JSON.stringify(req.body)}`);
         res.status(400).json({ message: 'No valid timeframes provided to process.' });
         return;
     }
@@ -195,35 +202,41 @@ class DataController {
           const job = result.value;
           if (job && job.id) {
             createdJobIds.push(job.id);
-            logger.info(`[Controller] Successfully added job ${JOB_TYPES.FETCH_CANDLES} for ${symbol} (${currentTf}) with ID: ${job.id} to the queue.`);
+            logger.info(`[Controller] Successfully added job ${JOB_TYPES.FETCH_CANDLES} for ${symbol} (${currentTf}) on ${exchange} with ID: ${job.id} to the queue.`);
           } else {
             allJobsSuccessfullyQueued = false;
-            logger.error(`[Controller] dataQueue.add for ${symbol} (${currentTf}) returned an unexpected result (no job or no job.id). Job object: ${JSON.stringify(job)}`);
+            logger.error(`[Controller] Job ${JOB_TYPES.FETCH_CANDLES} for ${symbol} (${currentTf}) on ${exchange} was resolved but with unexpected job object: ${JSON.stringify(job)}`);
           }
         } else {
           allJobsSuccessfullyQueued = false;
-          logger.error(`[Controller] Failed to add job ${JOB_TYPES.FETCH_CANDLES} for ${symbol} (${currentTf}): ${result.reason.message}`, { stack: result.reason.stack });
+          logger.error(`[Controller] Job ${JOB_TYPES.FETCH_CANDLES} for ${symbol} (${currentTf}) on ${exchange} was rejected with reason: ${result.reason}`);
         }
       });
 
-      if (createdJobIds.length > 0) {
-        const message = `Successfully added ${createdJobIds.length} fetch candles job(s) to the queue.` +
-                        (allJobsSuccessfullyQueued ? '' : ` Some jobs may have failed to queue (Total attempted: ${jobPromises.length}). Check logs.`);
+      if (allJobsSuccessfullyQueued && createdJobIds.length === timeframes.length) {
         res.status(202).json({ 
-            message,
+          message: `Fetch candles jobs added to the queue for ${symbol} on ${exchange}.`, 
             jobIds: createdJobIds,
-            totalAttempted: jobPromises.length,
-            totalSuccessfullyQueued: createdJobIds.length
+          symbol,
+          exchange,
+          timeframes 
         });
+        logger.info(`[Controller] All ${JOB_TYPES.FETCH_CANDLES} jobs for ${symbol} on ${exchange} (${timeframes.length} timeframes) successfully queued.`);
       } else {
-        logger.error(`[Controller] Failed to queue any fetch candles jobs for symbol ${symbol} with timeframes [${timeframes.join(', ')}]`);
-        res.status(500).json({ message: 'Failed to add any fetch candles jobs to the queue. Check server logs.' });
+        res.status(207).json({ 
+          message: `Partially successful. Some fetch candles jobs for ${symbol} on ${exchange} may have failed.`, 
+          jobIds: createdJobIds,
+          symbol,
+          exchange,
+          requestedTimeframes: timeframes,
+          successfulJobsCount: createdJobIds.length 
+        });
+        logger.warn(`[Controller] Partial success for ${JOB_TYPES.FETCH_CANDLES} jobs for ${symbol} on ${exchange}. ${createdJobIds.length}/${timeframes.length} jobs successfully queued.`);
       }
-
     } catch (error: any) {
-      logger.error(`[Controller] General error during queuing multiple fetch candles jobs for ${symbol}: ${error.message}`, { stack: error.stack });
+      logger.error(`[Controller] Error during Promise.allSettled for ${JOB_TYPES.FETCH_CANDLES} jobs for ${symbol} on ${exchange}: ${error.message}`, { stack: error.stack });
       if (!res.headersSent) {
-        res.status(500).json({ message: 'General error processing fetch candles jobs', error: error.message });
+        res.status(500).json({ message: `Failed to add some fetch candles jobs for ${symbol} on ${exchange}`, error: error.message });
       }
     }
   }
@@ -342,14 +355,31 @@ class DataController {
     }
   }
 
+  /**
+   * Получает все торговые пары с возможностью фильтрации по бирже.
+   */
   async getAllTradingPairs(req: Request, res: Response): Promise<void> {
-    logger.info('[DataController] Received request to get all trading pairs.');
     try {
-      const pairs = await dataService.getAllTradingPairs();
-      res.status(200).json(pairs);
+      const { exchange } = req.query;  // НОВОЕ: поддержка фильтрации по бирже
+      
+      logger.info(`Fetching all trading pairs${exchange ? ` for ${exchange}` : ''}...`);
+      const pairs = await dataService.getAllTradingPairs(exchange as string);
+      
+      res.status(200).json({
+        success: true,
+        data: pairs,
+        count: pairs.length,
+        exchange: exchange || 'all'
+      });
+      
+      logger.info(`Successfully returned ${pairs.length} trading pairs${exchange ? ` for ${exchange}` : ''}.`);
     } catch (error: any) {
-      logger.error('[DataController] Error fetching all trading pairs:', error);
-      res.status(500).json({ message: 'Error fetching trading pairs', error: error.message });
+      logger.error(`Error fetching trading pairs${(req.query.exchange as string) ? ` for ${req.query.exchange}` : ''}:`, error);
+      res.status(500).json({ 
+        success: false,
+        message: 'Failed to fetch trading pairs', 
+        error: error.message 
+      });
     }
   }
 
@@ -572,106 +602,51 @@ class DataController {
   }
 
   /**
-   * Получает исторические данные свечей напрямую из базы данных.
+   * Получает исторические данные свечей.
    */
   async getHistoricalCandles(req: Request, res: Response): Promise<void> {
     try {
-      logger.info(`[Controller] Received request for historical candles: ${JSON.stringify(req.body)}`);
+      const { symbol, timeframe, startTime, endTime, limit, exchange } = req.body;  // НОВОЕ: поддержка биржи
       
-      const { symbol, timeframe, startTime, endTime, limit = 1000 } = req.body;
-
-      // Валидация входных параметров
-      if (!symbol || typeof symbol !== 'string') {
+      if (!symbol || !timeframe) {
         res.status(400).json({ 
           success: false, 
-          message: 'Missing or invalid symbol parameter' 
+          message: 'Missing required parameters: symbol and timeframe are required.' 
         });
         return;
       }
 
-      if (!timeframe || typeof timeframe !== 'string') {
-        res.status(400).json({ 
-          success: false, 
-          message: 'Missing or invalid timeframe parameter' 
-        });
-        return;
-      }
+      logger.info(`Fetching historical candles for ${symbol} (${timeframe})${exchange ? ` on ${exchange}` : ''}...`);
 
-      // Проверяем валидность временных параметров
-      const start = startTime ? new Date(startTime) : null;
-      const end = endTime ? new Date(endTime) : null;
-      
-      if (startTime && (isNaN(start?.getTime() || 0))) {
-        res.status(400).json({ 
-          success: false, 
-          message: 'Invalid startTime parameter' 
-        });
-        return;
-      }
-
-      if (endTime && (isNaN(end?.getTime() || 0))) {
-        res.status(400).json({ 
-          success: false, 
-          message: 'Invalid endTime parameter' 
-        });
-        return;
-      }
-
-      // Ограничиваем количество запрашиваемых свечей
-      const requestLimit = Math.min(Math.max(1, parseInt(limit.toString(), 10) || 1000), 5000);
-      
-      logger.debug(`[Controller] Fetching candles for ${symbol} ${timeframe}:`, {
-        startTime: start?.toISOString(),
-        endTime: end?.toISOString(),
-        limit: requestLimit
-      });
-
-      // Получаем данные через сервис
-      const candleData = await dataService.getHistoricalCandles({
-        symbol: symbol.toUpperCase(),
+      const params = {
+        symbol,
         timeframe,
-        startTime: start?.getTime(),
-        endTime: end?.getTime(),
-        limit: requestLimit
-      });
+        startTime: startTime ? parseInt(startTime, 10) : undefined,
+        endTime: endTime ? parseInt(endTime, 10) : undefined,
+        limit: limit ? parseInt(limit, 10) : undefined,
+        exchange  // НОВОЕ: передаем биржу в параметры
+      };
 
-      if (!candleData || !Array.isArray(candleData)) {
-        logger.warn(`[Controller] No candle data found for ${symbol} ${timeframe}`);
-        res.status(404).json({ 
-          success: false, 
-          message: 'No candle data found for the specified parameters',
-          data: []
-        });
-        return;
-      }
-
-      logger.info(`[Controller] Successfully retrieved ${candleData.length} candles for ${symbol} ${timeframe}`);
+      const candles = await dataService.getHistoricalCandles(params);
       
       res.status(200).json({ 
         success: true, 
-        data: candleData,
-        meta: {
+        data: candles,
+        count: candles.length,
           symbol,
           timeframe,
-          count: candleData.length,
-          startTime: candleData[0]?.openTime || null,
-          endTime: candleData[candleData.length - 1]?.openTime || null
-        }
+        exchange: exchange || 'any'
       });
 
+      logger.info(`Successfully returned ${candles.length} historical candles for ${symbol} (${timeframe})${exchange ? ` on ${exchange}` : ''}.`);
+
     } catch (error: any) {
-      logger.error(`[Controller] Error fetching historical candles: ${error.message}`, { 
-        stack: error.stack,
-        body: req.body 
-      });
-      
-      if (!res.headersSent) {
+      logger.error(`Error fetching historical candles:`, error);
         res.status(500).json({ 
           success: false, 
           message: 'Failed to fetch historical candles', 
           error: error.message 
         });
-      }
     }
   }
 }

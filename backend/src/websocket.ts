@@ -44,15 +44,31 @@ const compressData = (data: any): Promise<string> => {
 const reduceDataSize = (data: any): any => {
   if (data.type === 'PORTFOLIO_BACKTEST_COMPLETED' && data.payload?.result) {
     const result = data.payload.result;
+    
+    // Считаем общее количество сделок
+    const totalTrades = Object.values(result.tradesByPair || {}).reduce((sum: number, trades: unknown) => {
+      return sum + (Array.isArray(trades) ? trades.length : 0);
+    }, 0);
+    
+    // АДАПТИВНОЕ ограничение сделок
+    let tradesPerPair: number;
+    if (totalTrades <= 2000) {
+      tradesPerPair = 2000; // Увеличено с 1000: если всего мало сделок - отправляем все
+    } else if (totalTrades <= 10000) {
+      tradesPerPair = 1000; // Увеличено с 500: умеренное ограничение
+    } else {
+      tradesPerPair = 500; // Увеличено с 200: агрессивное ограничение только для очень больших результатов
+    }
+    
     const reducedResult = {
       // Оставляем только основные метрики
       overallMetrics: result.overallMetrics,
       
-      // АГРЕССИВНОЕ ограничение сделок - только первые 50 сделок на пару для портфельного
+      // АДАПТИВНОЕ ограничение сделок на основе общего количества
       tradesByPair: Object.fromEntries(
         Object.entries(result.tradesByPair || {}).map(([pair, trades]) => [
           pair,
-          Array.isArray(trades) ? trades.slice(0, 50) : [] // Сильно ограничиваем до первых 50 сделок на пару
+          Array.isArray(trades) ? trades.slice(0, tradesPerPair) : []
         ])
       ),
       
@@ -61,15 +77,16 @@ const reduceDataSize = (data: any): any => {
       // УБИРАЕМ strategyCandlesByPair для портфельных бэктестов - слишком много данных
       // strategyCandlesByPair: undefined,
       
-      _dataReduced: true,
-      _dataReductionLevel: 'aggressive',
-      _originalTradesCount: Object.values(result.tradesByPair || {}).reduce((sum: number, trades: unknown) => {
-        return sum + (Array.isArray(trades) ? trades.length : 0);
-      }, 0),
+      _dataReduced: totalTrades > tradesPerPair,
+      _dataReductionLevel: totalTrades <= 2000 ? 'none' : totalTrades <= 10000 ? 'moderate' : 'aggressive',
+      _originalTradesCount: totalTrades,
       _reducedTradesCount: Object.values(result.tradesByPair || {}).reduce((sum: number, trades: unknown) => {
-        return sum + (Array.isArray(trades) ? Math.min(trades.length, 50) : 0);
+        return sum + (Array.isArray(trades) ? Math.min(trades.length, tradesPerPair) : 0);
       }, 0),
-      _note: 'Portfolio backtest data reduced for WebSocket transmission. Full results available via API.'
+      _tradesPerPairLimit: tradesPerPair,
+      _note: totalTrades > tradesPerPair 
+        ? `Portfolio backtest data reduced for WebSocket transmission (${totalTrades} -> ${Math.min(totalTrades, tradesPerPair * Object.keys(result.tradesByPair || {}).length)} trades). Full results available via API.`
+        : 'Full portfolio backtest results transmitted.'
     };
 
     return {

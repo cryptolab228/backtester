@@ -3,6 +3,7 @@ import logger from '@/utils/logger';
 import config from '@/config';
 import { createWorker, DATA_QUEUE_NAME, dataQueue, broadcastJobCounts } from '@/config/queue';
 import * as okxService from '@/services/okxService';
+import * as bybitService from '@/services/bybitService';
 import { dataService } from '@/services/dataService';
 import { broadcast } from '@/websocket';
 import { runBacktest, runPortfolioBacktest } from '@/modules/backtester/backtester';
@@ -24,6 +25,7 @@ export const JOB_TYPES = {
 
 // Интерфейсы для данных задач
 interface FetchPairsJobData {
+  exchange?: string; // НОВОЕ: поддержка биржи
   isUserPaused?: boolean;
 }
 
@@ -33,6 +35,7 @@ interface FetchCandlesJobData {
   startTime?: number;
   endTime?: number;
   limit?: number;
+  exchange?: string; // НОВОЕ: поддержка биржи
   isUserPaused?: boolean;
 }
 
@@ -42,6 +45,7 @@ interface FetchCandlesAndRunBacktestJobData {
   startTime: number;
   endTime: number;
   backtestParams: BacktestRunParameters;
+  exchange?: string; // НОВОЕ: поддержка биржи
   isUserPaused?: boolean;
 }
 
@@ -50,28 +54,79 @@ interface FetchPortfolioDataAndRunBacktestJobData {
   pairsNeedingData: string[];
   startTimestamp: number;
   endTimestamp: number;
+  exchange?: string; // НОВОЕ: поддержка биржи
   isUserPaused?: boolean;
 }
 
 type DataJobData = FetchPairsJobData | FetchCandlesJobData | FetchCandlesAndRunBacktestJobData | FetchPortfolioDataAndRunBacktestJobData;
 
 /**
+ * Получает API сервис для указанной биржи
+ */
+function getExchangeService(exchange: string = 'okx') {
+  switch (exchange) {
+    case 'bybit':
+      return bybitService;
+    case 'okx':
+    default:
+      return okxService;
+  }
+}
+
+/**
+ * Получает доступный диапазон торговли для символа на указанной бирже
+ */
+async function getTradingDateRange(symbol: string, exchange: string): Promise<{ startTime: number | null; endTime: number; launchTime?: number }> {
+  try {
+    const exchangeService = getExchangeService(exchange);
+    
+    // Проверяем, есть ли метод getTradingDateRange у сервиса биржи
+    if ('getTradingDateRange' in exchangeService && typeof exchangeService.getTradingDateRange === 'function') {
+      return await exchangeService.getTradingDateRange(symbol);
+    } else {
+      logger.warn(`[getTradingDateRange] Exchange ${exchange} does not support getTradingDateRange method`);
+      return {
+        startTime: null,
+        endTime: Date.now()
+      };
+    }
+  } catch (error: any) {
+    logger.error(`[getTradingDateRange] Error getting trading range for ${symbol} on ${exchange}:`, error.message);
+    return {
+      startTime: null,
+      endTime: Date.now()
+    };
+  }
+}
+
+/**
  * Обработчик задачи получения и сохранения списка торговых пар.
  */
 const processFetchPairs = async (job: Job<FetchPairsJobData>) => {
-  logger.info(`Processing job ${JOB_TYPES.FETCH_PAIRS} (ID: ${job.id}) with data:`, job.data);
+  const { exchange = 'okx' } = job.data;
+  logger.info(`Processing job ${JOB_TYPES.FETCH_PAIRS} (ID: ${job.id}) for exchange: ${exchange}`);
+  
   try {
-    logger.info(`Starting processFetchPairs for job ID: ${job.id}`);
-    const pairs = await okxService.getFuturesPairs();
-    logger.debug(`[Job ${job.id}] Fetched ${pairs.length} pairs from OKX.`);
+    logger.info(`Starting processFetchPairs for job ID: ${job.id}, exchange: ${exchange}`);
+    
+    const exchangeService = getExchangeService(exchange);
+    const pairs = await exchangeService.getFuturesPairs();
+    logger.debug(`[Job ${job.id}] Fetched ${pairs.length} pairs from ${exchange}.`);
 
-    await dataService.saveOrUpdateTradingPairs(pairs);
-    logger.debug(`[Job ${job.id}] Finished dataService.saveOrUpdateTradingPairs.`);
+    await dataService.saveOrUpdateTradingPairs(pairs, exchange);
+    logger.debug(`[Job ${job.id}] Finished dataService.saveOrUpdateTradingPairs for ${exchange}.`);
 
     logger.info(`Finished processFetchPairs for job ID: ${job.id} successfully.`);
 
+    return {
+      success: true,
+      exchange,
+      pairsProcessed: pairs.length,
+      message: `Successfully processed ${pairs.length} pairs for ${exchange}`
+    };
+
   } catch (error: any) {
-    logger.error(`Error processing job ${JOB_TYPES.FETCH_PAIRS} (ID: ${job.id}):`, error);
+    logger.error(`Error processing job ${JOB_TYPES.FETCH_PAIRS} (ID: ${job.id}) for ${exchange}:`, error);
     throw error;
   }
 };
@@ -80,48 +135,53 @@ const processFetchPairs = async (job: Job<FetchPairsJobData>) => {
  * Обработчик задачи получения и сохранения исторических свечей.
  */
 const processFetchCandles = async (job: Job<FetchCandlesJobData>) => {
-  const { symbol, timeframe, startTime, endTime, limit } = job.data;
-  // <-- Лог самого начала обработки
-  logger.info(`[Worker] Received job ${JOB_TYPES.FETCH_CANDLES} (ID: ${job.id}) for ${symbol} (${timeframe}). Starting processing...`);
+  const { symbol, timeframe, startTime, endTime, limit, exchange = 'okx' } = job.data;
+  
+  logger.info(`[Worker] Received job ${JOB_TYPES.FETCH_CANDLES} (ID: ${job.id}) for ${symbol} (${timeframe}) on ${exchange}. Starting processing...`);
 
-  logger.info(`Processing job ${JOB_TYPES.FETCH_CANDLES} (ID: ${job.id}) with data:`, job.data);
   try {
-    logger.info(`Starting processFetchCandles for job ID: ${job.id}, symbol: ${symbol}, timeframe: ${timeframe}`);
-    logger.debug(`[Job ${job.id}] Calling okxService.getHistoricalCandlesOptimized for ${symbol}...`);
+    logger.info(`Starting processFetchCandles for job ID: ${job.id}, symbol: ${symbol}, timeframe: ${timeframe}, exchange: ${exchange}`);
+    logger.debug(`[Job ${job.id}] Calling ${exchange}Service.getHistoricalCandlesOptimized for ${symbol}...`);
+    
+    const exchangeService = getExchangeService(exchange);
     
     // Добавляем таймаут для предотвращения зависания при загрузке данных
-    const fetchPromise = okxService.getHistoricalCandlesOptimized(symbol, timeframe, startTime, endTime, limit);
+    const fetchPromise = exchange === 'bybit' 
+      ? bybitService.getHistoricalCandlesOptimized(symbol, timeframe, startTime, endTime, limit)
+      : okxService.getHistoricalCandlesOptimized(symbol, timeframe, startTime, endTime, limit);
+      
     const timeoutPromise = new Promise<never>((_, reject) => 
-      setTimeout(() => reject(new Error(`OKX API timeout for ${symbol} after 5 minutes`)), 5 * 60 * 1000)
+      setTimeout(() => reject(new Error(`${exchange.toUpperCase()} API timeout for ${symbol} after 5 minutes`)), 5 * 60 * 1000)
     );
     
     const candles = await Promise.race([fetchPromise, timeoutPromise]);
-    logger.debug(`[Job ${job.id}] Fetched ${candles.length} candles for ${symbol} from OKX.`);
+    logger.debug(`[Job ${job.id}] Fetched ${candles.length} candles for ${symbol} from ${exchange}.`);
 
     if (candles.length > 0) {
-      logger.debug(`[Job ${job.id}] Calling dataService.saveCandles for ${symbol}...`);
-      await dataService.saveCandles(symbol, timeframe, candles);
-      logger.debug(`[Job ${job.id}] Finished dataService.saveCandles for ${symbol}.`);
+      logger.debug(`[Job ${job.id}] Calling dataService.saveCandles for ${symbol} on ${exchange}...`);
+      await dataService.saveCandles(symbol, timeframe, candles, exchange);
+      logger.debug(`[Job ${job.id}] Finished dataService.saveCandles for ${symbol} on ${exchange}.`);
     } else {
-      logger.info(`[Job ${job.id}] No candles fetched for ${symbol}, skipping database save.`);
+      logger.info(`[Job ${job.id}] No candles fetched for ${symbol} on ${exchange}, skipping database save.`);
     }
 
     logger.info(`Finished processFetchCandles for job ID: ${job.id} successfully.`);
     
-    // Явно возвращаем результат для правильного завершения задачи
     return {
       success: true,
       symbol,
       timeframe,
+      exchange,
       candlesProcessed: candles.length,
-      message: `Successfully processed ${candles.length} candles for ${symbol} (${timeframe})`
+      message: `Successfully processed ${candles.length} candles for ${symbol} (${timeframe}) on ${exchange}`
     };
 
   } catch (error: any) {
-    logger.error(`Error processing job ${JOB_TYPES.FETCH_CANDLES} (ID: ${job.id}) for ${symbol} (${timeframe}): ${error.message}`, {
+    logger.error(`Error processing job ${JOB_TYPES.FETCH_CANDLES} (ID: ${job.id}) for ${symbol} (${timeframe}) on ${exchange}: ${error.message}`, {
       stack: error.stack,
       symbol,
       timeframe,
+      exchange,
       startTime,
       endTime,
       limit
@@ -132,35 +192,39 @@ const processFetchCandles = async (job: Job<FetchCandlesJobData>) => {
 
 // Обработчик для новой задачи FETCH_CANDLES_AND_RUN_BACKTEST
 const processFetchCandlesAndRunBacktest = async (job: Job<FetchCandlesAndRunBacktestJobData>) => {
-  const { symbol, timeframe, startTime, endTime, backtestParams } = job.data;
+  const { symbol, timeframe, startTime, endTime, backtestParams, exchange = 'okx' } = job.data;
   const jobId = job.id;
-  logger.info(`[Worker] Received job ${JOB_TYPES.FETCH_CANDLES_AND_RUN_BACKTEST} (ID: ${jobId}) for ${symbol} (${timeframe}).`);
+  logger.info(`[Worker] Received job ${JOB_TYPES.FETCH_CANDLES_AND_RUN_BACKTEST} (ID: ${jobId}) for ${symbol} (${timeframe}) on ${exchange}.`);
   logger.debug(`[Job ${jobId}] Backtest params:`, backtestParams);
 
   try {
     // 1. Загрузка свечей
-    logger.info(`[Job ${jobId}] Calling okxService.getHistoricalCandlesOptimized for ${symbol} (${timeframe}) from ${new Date(startTime)} to ${new Date(endTime)}.`);
-    const candlesFromAPI = await okxService.getHistoricalCandlesOptimized(symbol, timeframe, startTime, endTime);
-    logger.info(`[Job ${jobId}] Fetched ${candlesFromAPI.length} candles from API for ${symbol}.`);
+    logger.info(`[Job ${jobId}] Calling ${exchange}Service.getHistoricalCandlesOptimized for ${symbol} (${timeframe}) from ${new Date(startTime)} to ${new Date(endTime)}.`);
+    
+    const exchangeService = getExchangeService(exchange);
+    const candlesFromAPI = exchange === 'bybit' 
+      ? await bybitService.getHistoricalCandlesOptimized(symbol, timeframe, startTime, endTime)
+      : await okxService.getHistoricalCandlesOptimized(symbol, timeframe, startTime, endTime);
+      
+    logger.info(`[Job ${jobId}] Fetched ${candlesFromAPI.length} candles from API for ${symbol} on ${exchange}.`);
 
     // 2. Сохранение свечей
     if (candlesFromAPI.length > 0) {
-      logger.info(`[Job ${jobId}] Calling dataService.saveCandles for ${symbol}.`);
-      await dataService.saveCandles(symbol, timeframe, candlesFromAPI);
-      logger.info(`[Job ${jobId}] Finished dataService.saveCandles for ${symbol}.`);
+      logger.info(`[Job ${jobId}] Calling dataService.saveCandles for ${symbol} on ${exchange}.`);
+      await dataService.saveCandles(symbol, timeframe, candlesFromAPI, exchange);
+      logger.info(`[Job ${jobId}] Finished dataService.saveCandles for ${symbol} on ${exchange}.`);
     } else {
-      logger.warn(`[Job ${jobId}] No candles fetched from API for ${symbol}. Backtest might not have enough data.`);
-      // Можно решить, прерывать ли здесь, если свечей 0. Пока продолжим.
+      logger.warn(`[Job ${jobId}] No candles fetched from API for ${symbol} on ${exchange}. Backtest might not have enough data.`);
     }
 
-    // 3. Получение свечей из БД для бэктеста (чтобы убедиться в их наличии и формате)
-    logger.info(`[Job ${jobId}] Fetching candles from DB for backtest: ${symbol} (${timeframe}) from ${new Date(startTime)} to ${new Date(endTime)}`);
-    const candlesFromDB = await dataService.getCandles(symbol, timeframe, startTime, endTime);
+    // 3. Получение свечей из БД для бэктеста
+    logger.info(`[Job ${jobId}] Fetching candles from DB for backtest: ${symbol} (${timeframe}) on ${exchange} from ${new Date(startTime)} to ${new Date(endTime)}`);
+    const candlesFromDB = await dataService.getCandles(symbol, timeframe, startTime, endTime, exchange);
     logger.info(`[Job ${jobId}] Fetched ${candlesFromDB.length} candles from DB for backtest.`);
 
     if (!candlesFromDB || candlesFromDB.length === 0) {
-      logger.error(`[Job ${jobId}] No candles found in DB for ${symbol} (${timeframe}) in range after fetch. Cannot run backtest.`);
-      throw new Error(`No candles in DB for ${symbol} after fetch attempt.`);
+      logger.error(`[Job ${jobId}] No candles found in DB for ${symbol} (${timeframe}) on ${exchange} in range after fetch. Cannot run backtest.`);
+      throw new Error(`No candles in DB for ${symbol} on ${exchange} after fetch attempt.`);
     }
 
     // 4. Адаптация данных для бэктеста
@@ -171,15 +235,13 @@ const processFetchCandlesAndRunBacktest = async (job: Job<FetchCandlesAndRunBack
       low: c.low,
       close: c.close,
       volume: c.volume,
-      // volumeQuote можно будет добавить, если он есть в Candle модели и нужен для бэктеста
     }));
     logger.info(`[Job ${jobId}] Prepared ${candlesToBacktest.length} candles for backtest execution.`);
 
     // 5. Запуск бэктеста
-    logger.info(`[Job ${jobId}] Starting backtest for ${symbol} with params:`, backtestParams);
+    logger.info(`[Job ${jobId}] Starting backtest for ${symbol} on ${exchange} with params:`, backtestParams);
     const backtestResult = await runBacktest(backtestParams, candlesToBacktest);
-    logger.info(`[Job ${jobId}] Backtest finished for ${symbol}. Trades: ${backtestResult.metrics.totalTrades}.`);
-    logger.debug(`[Job ${jobId}] Backtest result for ${symbol}:`, backtestResult);
+    logger.info(`[Job ${jobId}] Backtest finished for ${symbol} on ${exchange}. Trades: ${backtestResult.metrics.totalTrades}.`);
 
     // Отправляем результат через WebSocket
     broadcast({
@@ -188,7 +250,8 @@ const processFetchCandlesAndRunBacktest = async (job: Job<FetchCandlesAndRunBack
         jobId,
         symbol,
         timeframe,
-        backtestParams, // Исходные параметры, с которыми запускался
+        exchange,
+        backtestParams,
         result: backtestResult
       }
     });
@@ -197,131 +260,22 @@ const processFetchCandlesAndRunBacktest = async (job: Job<FetchCandlesAndRunBack
     logger.info(`Finished job ${JOB_TYPES.FETCH_CANDLES_AND_RUN_BACKTEST} (ID: ${jobId}) successfully.`);
 
   } catch (error: any) {
-    logger.error(`Error processing job ${JOB_TYPES.FETCH_CANDLES_AND_RUN_BACKTEST} (ID: ${jobId}) for ${symbol} (${timeframe}):`, error);
-    // Отправляем уведомление об ошибке через WebSocket
-    broadcast({
-      type: 'BACKTEST_FAILED',
-      payload: {
-        jobId,
-        symbol,
-        timeframe,
-        backtestParams,
-        error: { 
-          message: error.message,
-          // Можно добавить и другие детали ошибки, если это безопасно и полезно для фронтенда
-          // stack: error.stack // Не рекомендуется слать полный stacktrace на фронтенд
-        }
-      }
-    });
-    logger.info(`[Job ${jobId}] Broadcasted BACKTEST_FAILED event.`);
-    throw error; // Перебрасываем ошибку, чтобы задача была помечена как failed
-  }
-};
-
-// Обработчик для портфельного бектестинга FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST
-const processFetchPortfolioDataAndRunBacktest = async (job: Job<FetchPortfolioDataAndRunBacktestJobData>) => {
-  const { portfolioParams, pairsNeedingData, startTimestamp, endTimestamp } = job.data;
-  const jobId = job.id;
-  logger.info(`[Worker] Received job ${JOB_TYPES.FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST} (ID: ${jobId}) for portfolio backtest with ${pairsNeedingData.length} pairs needing data.`);
-  logger.debug(`[Job ${jobId}] Portfolio params:`, portfolioParams);
-  logger.debug(`[Job ${jobId}] Pairs needing data:`, pairsNeedingData);
-
-  try {
-    const candlesByPair: Record<string, CandleData[]> = {};
-
-    // 1. Загрузка данных для пар, которым нужны данные
-    for (const pairSymbol of pairsNeedingData) {
-      logger.info(`[Job ${jobId}] Fetching data for pair: ${pairSymbol}`);
-      
-      // 1.1 Загружаем исторические свечи через API (если нужно)
-      const candlesFromAPI = await okxService.getHistoricalCandles(
-        pairSymbol, 
-        portfolioParams.timeframe, 
-        startTimestamp, 
-        endTimestamp
-      );
-      logger.info(`[Job ${jobId}] Fetched ${candlesFromAPI.length} candles from API for ${pairSymbol}.`);
-
-      // 1.2 Сохраняем свечи в базу данных
-      if (candlesFromAPI.length > 0) {
-        await dataService.saveCandles(pairSymbol, portfolioParams.timeframe, candlesFromAPI);
-        logger.info(`[Job ${jobId}] Saved ${candlesFromAPI.length} candles to DB for ${pairSymbol}.`);
-    }
-
-      // 2. Получаем свечи из БД для портфельного бэктеста
-      logger.info(`[Job ${jobId}] Fetching candles from DB for ${pairSymbol} (${portfolioParams.timeframe}) from ${new Date(startTimestamp)} to ${new Date(endTimestamp)}`);
-      const candlesFromDB = await dataService.getCandles(
-        pairSymbol, 
-        portfolioParams.timeframe, 
-        startTimestamp, 
-        endTimestamp
-      );
-      
-      if (candlesFromDB && candlesFromDB.length > 0) {
-        // Адаптация данных для портфельного бектестера
-        candlesByPair[pairSymbol] = candlesFromDB.map((c: any) => ({
-          timestamp: Number(c.timestamp),
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close,
-          volume: c.volume,
-        }));
-        logger.info(`[Job ${jobId}] Prepared ${candlesByPair[pairSymbol].length} candles for ${pairSymbol}.`);
-      } else {
-        logger.warn(`[Job ${jobId}] No candles found in DB for ${pairSymbol} after fetch attempt.`);
-        // Устанавливаем пустой массив для пар без данных
-        candlesByPair[pairSymbol] = [];
-      }
-    }
-
-    // 3. Запуск портфельного бектеста
-    const totalCandlesLoaded = Object.values(candlesByPair).reduce((sum, candles) => sum + candles.length, 0);
-    logger.info(`[Job ${jobId}] Starting portfolio backtest with ${totalCandlesLoaded} total candles across ${Object.keys(candlesByPair).length} pairs.`);
-    logger.debug(`[Job ${jobId}] Candles by pair summary:`, Object.fromEntries(
-      Object.entries(candlesByPair).map(([pair, candles]) => [pair, candles.length])
-    ));
-
-    const portfolioBacktestResult = await runPortfolioBacktest(portfolioParams, candlesByPair);
-    logger.info(`[Job ${jobId}] Portfolio backtest finished. Total trades: ${portfolioBacktestResult.overallMetrics.totalPortfolioTrades}, Total PnL: ${portfolioBacktestResult.overallMetrics.totalPortfolioPnl}.`);
-
-    // 4. Отправляем результат через WebSocket
-    broadcast({
-      type: 'PORTFOLIO_BACKTEST_COMPLETED',
-      payload: {
-        jobId,
-        portfolioParams,
-        result: portfolioBacktestResult
-      }
-    });
-    logger.info(`[Job ${jobId}] Broadcasted PORTFOLIO_BACKTEST_COMPLETED event.`);
-
-    logger.info(`Finished job ${JOB_TYPES.FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST} (ID: ${jobId}) successfully.`);
-
-  } catch (error: any) {
-    logger.error(`Error processing job ${JOB_TYPES.FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST} (ID: ${jobId}):`, error);
-    
-    // Отправляем уведомление об ошибке через WebSocket
-    broadcast({
-      type: 'PORTFOLIO_BACKTEST_FAILED',
-      payload: {
-        jobId,
-        portfolioParams,
-        error: { 
-          message: error.message,
-        }
-      }
-    });
-    logger.info(`[Job ${jobId}] Broadcasted PORTFOLIO_BACKTEST_FAILED event.`);
-    throw error; // Перебрасываем ошибку, чтобы задача была помечена как failed
+    logger.error(`Error processing job ${JOB_TYPES.FETCH_CANDLES_AND_RUN_BACKTEST} (ID: ${jobId}) for ${symbol} (${timeframe}) on ${exchange}:`, error);
+    throw error;
   }
 };
 
 // НОВАЯ оптимизированная функция для портфельной загрузки с параллельной обработкой
 const processFetchPortfolioDataOptimized = async (job: Job<FetchPortfolioDataAndRunBacktestJobData>) => {
-  const { portfolioParams, pairsNeedingData, startTimestamp, endTimestamp } = job.data;
+  const { portfolioParams, pairsNeedingData, startTimestamp, endTimestamp, exchange } = job.data;
   const jobId = job.id;
-  logger.info(`[Worker-OPTIMIZED] Received job ${JOB_TYPES.FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST} (ID: ${jobId}) for ${pairsNeedingData.length} pairs using OPTIMIZED algorithm.`);
+  const targetExchange = exchange || 'bybit'; // ИСПРАВЛЕНО: Используем exchange из job.data или default bybit
+  
+  logger.info(`[Worker-OPTIMIZED] Received job ${JOB_TYPES.FETCH_PORTFOLIO_DATA_AND_RUN_BACKTEST} (ID: ${jobId}) for ${pairsNeedingData.length} pairs using OPTIMIZED algorithm on ${targetExchange.toUpperCase()}.`);
+  
+  // ИСПРАВЛЕНО: Получаем правильный сервис биржи
+  const exchangeService = getExchangeService(targetExchange);
+  logger.info(`[Job-OPT ${jobId}] Using ${targetExchange.toUpperCase()} exchange service for data fetching.`);
   
   // ДЕБАГ: Логируем временной диапазон
   logger.info(`[Job-OPT ${jobId}] DEBUG: Time range requested: ${new Date(startTimestamp)} - ${new Date(endTimestamp)} (${Math.round((endTimestamp - startTimestamp) / (24 * 60 * 60 * 1000))} days)`);
@@ -329,53 +283,115 @@ const processFetchPortfolioDataOptimized = async (job: Job<FetchPortfolioDataAnd
   logger.info(`[Job-OPT ${jobId}] DEBUG: Pairs needing data: ${pairsNeedingData.slice(0, 5).join(', ')}${pairsNeedingData.length > 5 ? '...' : ''}`);
 
   try {
-    // 1. ПРИОРИТЕТ: Сначала загружаем данные из БД для всех пар
+    // ИСПРАВЛЕНИЕ: Используем контроллерную логику - загружаем из БД только пары, которые НЕ нуждаются в дозагрузке
+    const pairsAlreadyInDB = portfolioParams.pairSymbols.filter(pair => !pairsNeedingData.includes(pair));
+    const totalPairsToProcess = portfolioParams.pairSymbols.length;
+    
+    logger.info(`[Job-OPT ${jobId}] Controller analysis: ${pairsNeedingData.length} pairs need API fetch, ${pairsAlreadyInDB.length} pairs should be in DB`);
+    logger.info(`[Job-OPT ${jobId}] Pairs needing API fetch: ${pairsNeedingData.join(', ')}`);
+    logger.info(`[Job-OPT ${jobId}] Pairs expected in DB: ${pairsAlreadyInDB.join(', ')}`);
+    
+    // 1. Загружаем данные из БД для пар, которые НЕ требуют API дозагрузки
     const candlesFromDB: Record<string, CandleData[]> = {};
     let totalCandlesFromDB = 0;
-    let pairsWithCompleteData: string[] = [];
     
-    logger.info(`[Job-OPT ${jobId}] Loading existing data from DATABASE for ${portfolioParams.pairSymbols.length} pairs...`);
+    logger.info(`[Job-OPT ${jobId}] Loading existing data from DATABASE for ${pairsAlreadyInDB.length} pairs...`);
     
     // ВАЖНО: Ограничиваем количество пар для предотвращения перегрузки
     const MAX_PAIRS_LIMIT = 50; // Максимум 50 пар за раз
-    const MAX_CANDLES_PER_PAIR = 20000; // Увеличено до 20К свечей на пару (для 2 лет 1h данных ~17500 свечей)
+    const MAX_CANDLES_PER_PAIR = 30000; // Увеличено до 30К свечей на пару (для 3+ лет 1h данных ~26300 свечей)
     const MAX_TOTAL_CANDLES = 500000; // Увеличено до 500К свечей всего
     
-    if (portfolioParams.pairSymbols.length > MAX_PAIRS_LIMIT) {
-      logger.warn(`[Job-OPT ${jobId}] Too many pairs requested (${portfolioParams.pairSymbols.length}). Limiting to first ${MAX_PAIRS_LIMIT} pairs.`);
+    let actualPairsAlreadyInDB = pairsAlreadyInDB;
+    
+    if (totalPairsToProcess > MAX_PAIRS_LIMIT) {
+      logger.warn(`[Job-OPT ${jobId}] Too many pairs requested (${totalPairsToProcess}). Limiting portfolio to first ${MAX_PAIRS_LIMIT} pairs.`);
       portfolioParams.pairSymbols = portfolioParams.pairSymbols.slice(0, MAX_PAIRS_LIMIT);
+      // Пересчитываем списки после ограничения
+      const limitedPairsNeedingData = pairsNeedingData.filter(pair => portfolioParams.pairSymbols.includes(pair));
+      actualPairsAlreadyInDB = portfolioParams.pairSymbols.filter(pair => !limitedPairsNeedingData.includes(pair));
+      logger.warn(`[Job-OPT ${jobId}] After limiting: ${limitedPairsNeedingData.length} need API, ${actualPairsAlreadyInDB.length} from DB`);
     }
     
-    for (const symbol of portfolioParams.pairSymbols) {
+    for (const symbol of actualPairsAlreadyInDB) {
       try {
-        // Ограничиваем временной период для предотвращения загрузки слишком большого объема данных
-        const timeRangeMs = endTimestamp - startTimestamp;
-        const maxTimeRangeMs = 2 * 365 * 24 * 60 * 60 * 1000; // Увеличено до 2 лет
-        
+        // ИСПРАВЛЕНО: Убираем принудительное ограничение временного диапазона для пар из БД
+        // Контроллер уже проанализировал покрытие данных, поэтому используем полный запрошенный диапазон
         let effectiveStartTime = startTimestamp;
         let effectiveEndTime = endTimestamp;
         
-        if (timeRangeMs > maxTimeRangeMs) {
-          effectiveStartTime = endTimestamp - maxTimeRangeMs;
-          logger.warn(`[Job-OPT ${jobId}] Time range too large for ${symbol}. Limiting to last 2 years: ${new Date(effectiveStartTime)} - ${new Date(effectiveEndTime)}`);
-        }
+        const timeRangeMs = endTimestamp - startTimestamp;
+        const timeRangeDays = Math.round(timeRangeMs / (24 * 60 * 60 * 1000));
+        logger.debug(`[Job-OPT ${jobId}] Loading ${symbol} for full requested range: ${timeRangeDays} days (${new Date(effectiveStartTime)} - ${new Date(effectiveEndTime)})`);
         
         logger.debug(`[Job-OPT ${jobId}] Loading ${symbol} from DB: ${new Date(effectiveStartTime)} - ${new Date(effectiveEndTime)}`);
-        const candles = await dataService.getCandles(symbol, portfolioParams.timeframe, effectiveStartTime, effectiveEndTime);
+        // ИСПРАВЛЕНО: Передаем exchange в dataService
+        const candles = await dataService.getCandles(symbol, portfolioParams.timeframe, effectiveStartTime, effectiveEndTime, targetExchange);
         logger.debug(`[Job-OPT ${jobId}] DB returned ${candles.length} candles for ${symbol}`);
+        
+        // ДИАГНОСТИКА: Проверяем структуру и типы данных первой свечи
+        if (candles.length > 0) {
+          const firstCandle = candles[0];
+          logger.info(`[Job-OPT ${jobId}] 🔍 DATA TYPES DIAGNOSIS for ${symbol}:`);
+          logger.info(`[Job-OPT ${jobId}]   timestamp: ${firstCandle.timestamp} (type: ${typeof firstCandle.timestamp})`);
+          logger.info(`[Job-OPT ${jobId}]   open: ${firstCandle.open} (type: ${typeof firstCandle.open})`);
+          logger.info(`[Job-OPT ${jobId}]   high: ${firstCandle.high} (type: ${typeof firstCandle.high})`);
+          logger.info(`[Job-OPT ${jobId}]   low: ${firstCandle.low} (type: ${typeof firstCandle.low})`);
+          logger.info(`[Job-OPT ${jobId}]   close: ${firstCandle.close} (type: ${typeof firstCandle.close})`);
+          logger.info(`[Job-OPT ${jobId}]   volume: ${firstCandle.volume} (type: ${typeof firstCandle.volume})`);
+          
+          // Проверяем арифметические операции
+          const openNum = parseFloat(firstCandle.open as any);
+          const closeNum = parseFloat(firstCandle.close as any);
+          logger.info(`[Job-OPT ${jobId}]   🧮 ARITHMETIC TEST: open + close = ${firstCandle.open} + ${firstCandle.close} = ${(firstCandle.open as any) + (firstCandle.close as any)} (direct)`);
+          logger.info(`[Job-OPT ${jobId}]   🧮 ARITHMETIC TEST: parseFloat(open) + parseFloat(close) = ${openNum} + ${closeNum} = ${openNum + closeNum} (parsed)`);
+        }
         
         // Ограничиваем количество свечей на пару
         let limitedCandles = candles;
         if (candles.length > MAX_CANDLES_PER_PAIR) {
           limitedCandles = candles.slice(-MAX_CANDLES_PER_PAIR); // Берем последние свечи
           logger.warn(`[Job-OPT ${jobId}] Too many candles for ${symbol} (${candles.length}). Limited to ${MAX_CANDLES_PER_PAIR} recent candles.`);
+          
+          // Дополнительная диагностика после ограничения
+          if (limitedCandles.length > 0) {
+            const firstLimited = limitedCandles[0];
+            const lastLimited = limitedCandles[limitedCandles.length - 1];
+            logger.debug(`[Job-OPT ${jobId}] After limiting ${symbol}: first candle timestamp=${firstLimited.timestamp} (${typeof firstLimited.timestamp}), last candle timestamp=${lastLimited.timestamp} (${typeof lastLimited.timestamp})`);
+          }
         }
         
         // ДЕБАГ: Логируем временной диапазон свечей
         if (limitedCandles.length > 0) {
-          const firstCandle = new Date(limitedCandles[0].timestamp);
-          const lastCandle = new Date(limitedCandles[limitedCandles.length - 1].timestamp);
-          logger.debug(`[Job-OPT ${jobId}] ${symbol} DB data range: ${firstCandle} - ${lastCandle} (${limitedCandles.length} candles)`);
+          try {
+            // ИСПРАВЛЕНО: Правильная обработка timestamp (может быть в секундах или миллисекундах)
+            const firstTimestamp = limitedCandles[0].timestamp;
+            const lastTimestamp = limitedCandles[limitedCandles.length - 1].timestamp;
+            
+            // Проверяем, что timestamp - числа
+            if (typeof firstTimestamp !== 'number' || typeof lastTimestamp !== 'number') {
+              logger.warn(`[Job-OPT ${jobId}] Invalid timestamp types for ${symbol}: first=${typeof firstTimestamp}, last=${typeof lastTimestamp}`);
+            } else {
+              // Если timestamp в секундах (меньше 10^12), то умножаем на 1000
+              const firstMs = firstTimestamp < 1e12 ? firstTimestamp * 1000 : firstTimestamp;
+              const lastMs = lastTimestamp < 1e12 ? lastTimestamp * 1000 : lastTimestamp;
+              
+              // Проверяем диапазон валидных timestamp (от 1970 до 2100 года)
+              const minValidTime = new Date('1970-01-01').getTime();
+              const maxValidTime = new Date('2100-01-01').getTime();
+              
+              if (firstMs >= minValidTime && firstMs <= maxValidTime && 
+                  lastMs >= minValidTime && lastMs <= maxValidTime) {
+                const firstCandle = new Date(firstMs);
+                const lastCandle = new Date(lastMs);
+                logger.debug(`[Job-OPT ${jobId}] ${symbol} DB data range: ${firstCandle.toISOString()} - ${lastCandle.toISOString()} (${limitedCandles.length} candles)`);
+              } else {
+                logger.warn(`[Job-OPT ${jobId}] Invalid timestamp range for ${symbol}: first=${firstMs}, last=${lastMs}. Raw values: first=${firstTimestamp}, last=${lastTimestamp}`);
+              }
+            }
+          } catch (timeError: any) {
+            logger.warn(`[Job-OPT ${jobId}] Failed to process timestamps for ${symbol}: ${timeError.message}. First=${limitedCandles[0]?.timestamp}, Last=${limitedCandles[limitedCandles.length - 1]?.timestamp}`);
+          }
         }
         
         candlesFromDB[symbol] = limitedCandles;
@@ -388,10 +404,9 @@ const processFetchPortfolioDataOptimized = async (job: Job<FetchPortfolioDataAnd
         }
         
         if (limitedCandles.length > 0) {
-          pairsWithCompleteData.push(symbol);
           logger.debug(`[Job-OPT ${jobId}] Loaded ${limitedCandles.length} candles from DB for ${symbol}.`);
         } else {
-          logger.warn(`[Job-OPT ${jobId}] No data in DB for ${symbol} - may need API fetch.`);
+          logger.warn(`[Job-OPT ${jobId}] No data in DB for ${symbol} - this should not happen for pairs marked as ready in controller.`);
         }
       } catch (error: any) {
         logger.warn(`[Job-OPT ${jobId}] Failed to load ${symbol} from DB: ${error.message}`);
@@ -399,42 +414,54 @@ const processFetchPortfolioDataOptimized = async (job: Job<FetchPortfolioDataAnd
       }
     }
     
-    logger.info(`[Job-OPT ${jobId}] DATABASE load completed: ${pairsWithCompleteData.length}/${portfolioParams.pairSymbols.length} pairs have data, ${totalCandlesFromDB} total candles from DB.`);
-    logger.info(`[Job-OPT ${jobId}] DB data ratio: ${(pairsWithCompleteData.length / portfolioParams.pairSymbols.length * 100).toFixed(1)}% (threshold: 50%)`);
+    logger.info(`[Job-OPT ${jobId}] DATABASE load completed: ${actualPairsAlreadyInDB.length} pairs loaded from DB with ${totalCandlesFromDB} total candles.`);
 
-    // 2. Если большинство пар имеют данные в БД, используем их. Иначе догружаем через API
-    const dbDataRatio = pairsWithCompleteData.length / portfolioParams.pairSymbols.length;
-    
+    // 2. Загружаем данные через API только для пар, указанных контроллером как требующих дозагрузки
     let finalCandlesData: Record<string, CandleData[]>;
     
-    if (dbDataRatio >= 0.5) { // Снижено с 80% до 50% - если 50%+ пар имеют данные в БД
-      logger.info(`[Job-OPT ${jobId}] Using DATABASE data (${(dbDataRatio * 100).toFixed(1)}% coverage). Skipping API fetch for performance.`);
+    if (pairsNeedingData.length === 0) {
+      // Все данные уже в БД
+      logger.info(`[Job-OPT ${jobId}] All pairs already in DB. Using DATABASE data only (100% coverage). Skipping API fetch.`);
       finalCandlesData = candlesFromDB;
     } else {
-      // 3. Если данных в БД недостаточно, загружаем через API (как раньше)
-      logger.info(`[Job-OPT ${jobId}] DB data insufficient (${(dbDataRatio * 100).toFixed(1)}% coverage). Fetching via API...`);
+      // Догружаем только пары требующие дозагрузки, комбинируем с БД данными
+      logger.info(`[Job-OPT ${jobId}] Fetching data for ${pairsNeedingData.length} pairs via API as determined by controller...`);
       
-      const requests: CandleRequest[] = pairsNeedingData.map(symbol => ({
-        symbol,
-        timeframe: portfolioParams.timeframe,
-        startTime: startTimestamp,
-        endTime: endTimestamp
-      }));
-
-      const parallelResults = await okxService.getHistoricalCandlesParallel(requests, 3);
-      const totalCandlesFromAPI = Object.values(parallelResults).reduce((sum, candles) => sum + candles.length, 0);
+      const missingPairsData: Record<string, CandleData[]> = {};
       
-      logger.info(`[Job-OPT ${jobId}] API fetch completed: ${totalCandlesFromAPI} total candles loaded from API.`);
-
-      // Сохранение новых данных в БД
-      for (const [symbol, candles] of Object.entries(parallelResults)) {
-        if (candles.length > 0) {
-          await dataService.saveCandles(symbol, portfolioParams.timeframe, candles);
-          logger.debug(`[Job-OPT ${jobId}] Saved ${candles.length} candles for ${symbol}.`);
+      // Загружаем данные только для пар требующих дозагрузки согласно анализу контроллера
+      for (const symbol of pairsNeedingData) {
+        try {
+          logger.info(`[OptimizedFetcher] Fetching data for ${symbol} (${Math.round((endTimestamp - startTimestamp) / (24 * 60 * 60 * 1000))} days)...`);
+          
+          const candles = await exchangeService.getHistoricalCandles(
+            symbol,
+            portfolioParams.timeframe,
+            startTimestamp,
+            endTimestamp
+          );
+          
+          logger.info(`[OptimizedFetcher] Completed fetch for ${symbol}: ${candles.length} candles`);
+          missingPairsData[symbol] = candles;
+          
+          // Сохраняем в БД
+          if (candles.length > 0) {
+            await dataService.saveCandles(symbol, portfolioParams.timeframe, candles, targetExchange);
+            logger.debug(`[Job-OPT ${jobId}] Saved ${candles.length} candles for ${symbol} on ${targetExchange}.`);
+          }
+        } catch (error: any) {
+          logger.error(`[OptimizedFetcher] Failed to fetch ${symbol}: ${error.message}`);
+          missingPairsData[symbol] = [];
         }
       }
       
-      finalCandlesData = parallelResults;
+      const totalCandlesFromAPI = Object.values(missingPairsData).reduce((sum, candles) => sum + candles.length, 0);
+      logger.info(`[Job-OPT ${jobId}] API fetch completed: ${totalCandlesFromAPI} total candles loaded for ${pairsNeedingData.length} pairs from ${targetExchange.toUpperCase()} API.`);
+
+      // Комбинируем данные из БД и API
+      finalCandlesData = { ...candlesFromDB, ...missingPairsData };
+      
+      logger.info(`[Job-OPT ${jobId}] Combined data: ${Object.keys(candlesFromDB).length} pairs from DB + ${Object.keys(missingPairsData).length} pairs from API = ${Object.keys(finalCandlesData).length} total pairs`);
     }
 
     // 4. Запуск портфельного бэктеста с финальными данными
@@ -530,11 +557,11 @@ const processFetchPortfolioDataOptimized = async (job: Job<FetchPortfolioDataAnd
           result: {
             overallMetrics: portfolioBacktestResult.overallMetrics,
             metricsByPair: portfolioBacktestResult.metricsByPair,
-            // Ограниченный набор сделок для предварительного просмотра
+            // Увеличиваем набор сделок для превью до 1000 на пару
             tradesByPair: Object.fromEntries(
               Object.entries(portfolioBacktestResult.tradesByPair || {}).map(([pair, trades]) => [
                 pair,
-                Array.isArray(trades) ? trades.slice(0, 10) : []
+                Array.isArray(trades) ? trades.slice(0, 1000) : [] // Увеличено с 100 до 1000
               ])
             ),
             _largeDataSavedToFile: true,
@@ -553,8 +580,9 @@ const processFetchPortfolioDataOptimized = async (job: Job<FetchPortfolioDataAnd
             totalCandlesLoaded: totalFinalCandles,
             successfulPairs: successfulFinalPairs,
             totalPairs: portfolioParams.pairSymbols.length,
-            fetchMethod: dbDataRatio >= 0.5 ? 'database-primary' : 'api-fallback',
-            dbDataRatio: Math.round(dbDataRatio * 100),
+            fetchMethod: pairsNeedingData.length === 0 ? 'database-only' : 'hybrid-db-api',
+            pairsFromDB: actualPairsAlreadyInDB.length,
+            pairsFromAPI: pairsNeedingData.length,
             candlesFromDB: totalCandlesFromDB
           }
         }
@@ -567,11 +595,11 @@ const processFetchPortfolioDataOptimized = async (job: Job<FetchPortfolioDataAnd
       const reducedResult = {
         overallMetrics: portfolioBacktestResult.overallMetrics,
         metricsByPair: portfolioBacktestResult.metricsByPair,
-        // Ограничиваем сделки - только первые 20 на пару
+        // Увеличиваем лимит сделок до 500 на пару для лучшего отображения
         tradesByPair: Object.fromEntries(
           Object.entries(portfolioBacktestResult.tradesByPair || {}).map(([pair, trades]) => [
             pair,
-            Array.isArray(trades) ? trades.slice(0, 20) : []
+            Array.isArray(trades) ? trades.slice(0, 500) : [] // Увеличено с 20 до 500
           ])
         ),
         _dataReduced: true,
@@ -591,8 +619,9 @@ const processFetchPortfolioDataOptimized = async (job: Job<FetchPortfolioDataAnd
             totalCandlesLoaded: totalFinalCandles,
             successfulPairs: successfulFinalPairs,
             totalPairs: portfolioParams.pairSymbols.length,
-            fetchMethod: dbDataRatio >= 0.5 ? 'database-primary' : 'api-fallback',
-            dbDataRatio: Math.round(dbDataRatio * 100),
+            fetchMethod: pairsNeedingData.length === 0 ? 'database-only' : 'hybrid-db-api',
+            pairsFromDB: actualPairsAlreadyInDB.length,
+            pairsFromAPI: pairsNeedingData.length,
             candlesFromDB: totalCandlesFromDB
           }
         }

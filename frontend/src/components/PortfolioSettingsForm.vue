@@ -9,8 +9,8 @@
       <MultiSelect
         v-model="selectedPairs"
         :options="tradingPairOptions"
-        optionLabel="label"
-        optionValue="value"
+        option-label="label"
+        option-value="value"
         placeholder="Выберите торговые пары"
         :filter="true"
         filterPlaceholder="Поиск пар"
