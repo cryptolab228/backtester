@@ -10,6 +10,7 @@ services:
     volumes:
       - ./backend/src:/app/src # Монтируем src для live reload в разработке (если используется ts-node-dev или аналог вне Docker)
       - ./backend/logs:/app/logs # Монтируем папку логов
+      - ./backend/public:/app/public # Монтируем папку public для файлов результатов
       # - ./backend/.env:/app/.env # Монтируем .env файл
     environment:
       # Переменные окружения можно задать здесь или в .env файле
@@ -22,6 +23,21 @@ services:
       DB_DATABASE: backtester_db
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      # Настройки Node.js для производительности
+      NODE_OPTIONS: "--max-old-space-size=4096 --max-semi-space-size=128"
+    # Ограничения и резервирование ресурсов
+    deploy:
+      resources:
+        reservations:
+          memory: 2G
+          cpus: '2.0'
+        limits:
+          memory: 4G
+          cpus: '4.0'
+    # Альтернативная настройка для docker-compose v2
+    mem_limit: 4g
+    cpus: 4.0
+    mem_reservation: 2g
     depends_on:
       - db
       - redis

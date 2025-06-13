@@ -12,6 +12,7 @@ export interface BacktestRunParameters {
   endDate: string;   // ISO string date
   initialCapital: number;
   strategyParameters: StrategyParameters;
+  exchange?: string; // НОВОЕ: поддержка биржи (okx | bybit)
 }
 
 // Детали одной сделки
@@ -95,6 +96,7 @@ export interface PortfolioBacktestRunParameters {
   initialPortfolioCapital: number;
   strategyParameters: StrategyParameters;
   portfolioSettings?: PortfolioSettings;
+  exchange?: string; // НОВОЕ: поддержка биржи (okx | bybit)
 }
 
 // Настройки для портфельного бектеста

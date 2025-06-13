@@ -118,7 +118,7 @@ export interface StrategyCandle extends CandleData {
   avgVolume?: number;
   approxDelta?: number;
   isVolumeCluster?: boolean;
-  volumeClusterStrength?: number;
+  volumeClusterStrength?: number | undefined;
   entryConditionLong?: boolean;
   entryConditionShort?: boolean;
   signalStrength?: number | null;
@@ -228,6 +228,12 @@ export const applyStrategyLogic = (
   const vahHistory: (number | null)[] = [];
   const valHistory: (number | null)[] = [];
 
+  // === ОПТИМИЗАЦИЯ VOLUME PROFILE ===
+  // Кэш для Volume Profile результатов чтобы избежать дублирующих вычислений
+  const vpCache = new Map<string, VolumeProfileResult>();
+  const VP_CACHE_MAX_SIZE = 1000; // Максимум 1000 кэшированных результатов
+  const VP_CALCULATION_INTERVAL = 10; // Вычисляем VP только каждые 10 свечей
+  
   // Основной цикл по свечам для применения логики
   const strategyCandles = candles.map((candle, index) => {
     const currentAtr = atrValues[index];
@@ -246,25 +252,65 @@ export const applyStrategyLogic = (
       entryConditionShort: false,
       signalStrength: null,
       isVolumeCluster: false, 
-      volumeClusterStrength: 0,
+      volumeClusterStrength: undefined,
     };
 
-    // --- Расчет Volume Profile и POC/VAH/VAL для текущего окна ---
+    // --- ОПТИМИЗИРОВАННЫЙ расчет Volume Profile ---
     let currentVpResult: VolumeProfileResult | null = null;
-    if (index >= dlcPeriod - 1) {
+    
+    // Вычисляем VP только при достаточных данных и с интервалом
+    if (index >= dlcPeriod - 1 && (index % VP_CALCULATION_INTERVAL === 0 || index === candles.length - 1)) {
       const vpSlice = candles.slice(index - dlcPeriod + 1, index + 1);
+      
+      // Создаем кэш-ключ на основе временного диапазона и размера среза
+      const cacheKey = `${vpSlice[0].timestamp}-${vpSlice[vpSlice.length - 1].timestamp}-${vpSlice.length}`;
+      
+      // Проверяем кэш
+      if (vpCache.has(cacheKey)) {
+        currentVpResult = vpCache.get(cacheKey)!;
+      } else {
+        // Вычисляем только если данных достаточно для осмысленного профиля
+        if (vpSlice.length >= 10) { // Минимум 10 свечей для профиля
+          try {
       currentVpResult = calculateVolumeProfile(vpSlice, vpNumBins, vpVaPercentage);
-      if (currentVpResult) {
-        // Логика определения POC, VAH, VAL на основе currentVpResult
-        // Для упрощения, предположим, что pocHistory и т.д. заполняются здесь
-        // На самом деле, вам нужна логика скользящего POC/VAH/VAL или использование `pocLookback`
+            
+            // Сохраняем в кэш с ограничением размера
+            if (vpCache.size >= VP_CACHE_MAX_SIZE) {
+              // Удаляем самый старый элемент
+              const firstKey = vpCache.keys().next().value;
+              if (firstKey) {
+                vpCache.delete(firstKey);
+              }
+            }
+            vpCache.set(cacheKey, currentVpResult);
+          } catch (error: any) {
+            // logger.warn(`VP calculation failed for slice at index ${index}: ${error.message}`);
+            currentVpResult = null;
+          }
+        }
       }
     }
-    // Placeholder для POC/VAH/VAL - замените реальной логикой!
+    
+    // Используем последний вычисленный результат, если текущий не вычислялся
+    if (!currentVpResult && index > 0) {
+      // Ищем последний доступный VP результат в предыдущих свечах
+      for (let lookback = 1; lookback <= Math.min(VP_CALCULATION_INTERVAL, index); lookback++) {
+        const prevIndex = index - lookback;
+        if (prevIndex >= 0) {
+          const vpSlice = candles.slice(Math.max(0, prevIndex - dlcPeriod + 1), prevIndex + 1);
+          const cacheKey = `${vpSlice[0].timestamp}-${vpSlice[vpSlice.length - 1].timestamp}-${vpSlice.length}`;
+          if (vpCache.has(cacheKey)) {
+            currentVpResult = vpCache.get(cacheKey)!;
+            break;
+          }
+        }
+      }
+    }
+    
+    // Значения POC/VAH/VAL (с защитой от null)
     const currentPoc = currentVpResult?.poc ?? null; 
     const currentVah = currentVpResult?.vah ?? null;
     const currentVal = currentVpResult?.val ?? null;
-
 
     // --- Логика Кластеров ---
     // (Уже есть в вашем коде, но может потребовать доработки для силы кластера)
@@ -273,6 +319,9 @@ export const applyStrategyLogic = (
       strategyCandle.isVolumeCluster = true;
       strategyCandle.volumeClusterStrength = (candle.volume / currentAvgVolume) - clusterMinVolumeThresholdMultiplier;
       // Здесь нужно определить, бычий это кластер или медвежий, например, по дельте или свече
+    } else {
+      // Если кластера нет, оставляем volumeClusterStrength как undefined
+      strategyCandle.volumeClusterStrength = undefined;
     }
     // --- Конец Логики Кластеров ---
     

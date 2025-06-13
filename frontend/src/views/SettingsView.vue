@@ -62,8 +62,8 @@
 
             <div class="field">
               <label for="exchangeType" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Биржа</label>
-              <Dropdown id="exchangeType" v-model="editableConnectionForm.exchange" :options="exchangeTypeOptions"
-                        optionLabel="label" optionValue="value" placeholder="Выберите биржу"
+              <Select id="exchangeType" v-model="editableConnectionForm.exchange" :options="exchangeTypeOptions"
+                        option-label="label" option-value="value" placeholder="Выберите биржу"
                         @change="onExchangeTypeChange" class="w-full"/>
             </div>
 
@@ -118,7 +118,7 @@ import Panel from 'primevue/panel';
 import Button from 'primevue/button';
 import ProgressSpinner from 'primevue/progressspinner';
 import OrderList from 'primevue/orderlist';
-import Dropdown from 'primevue/dropdown';
+import Select from 'primevue/select';
 import InputText from 'primevue/inputtext';
 import Password from 'primevue/password';
 import Checkbox from 'primevue/checkbox';

@@ -57,6 +57,7 @@ export interface BacktestRunParameters {
   endDate: string;   // ISO string date
   initialCapital: number;
   strategyParameters: StrategyParameters; 
+  exchange?: string;
 }
 
 export interface Trade {
@@ -79,6 +80,12 @@ export interface Trade {
   duration?: number; // in milliseconds or seconds
   profitPercentage?: number;
   riskRewardRatio?: number;
+  // Chart-related properties for timeframe switching
+  backtestTimeframe?: string; // Original timeframe used in backtest
+  backtestTimeRange?: {
+    startTime: number;
+    endTime: number;
+  };
 }
 
 export interface BacktestMetrics {
@@ -140,6 +147,7 @@ export interface PortfolioBacktestRunParameters {
   initialPortfolioCapital: number;
   strategyParameters: StrategyParameters;
   portfolioSettings?: PortfolioSettings;
+  exchange?: string;
 }
 
 export interface PortfolioMetrics {
@@ -184,4 +192,16 @@ export interface PortfolioBacktestResult {
   jobId?: string;
   status?: 'queued' | 'running' | 'completed' | 'failed';
   message?: string;
+  
+  // Large file support
+  _largeDataSavedToFile?: boolean;
+  _downloadUrl?: string;
+  _fullDataSize?: string;
+  _previewNote?: string;
+  
+  // Data reduction support
+  _dataReduced?: boolean;
+  _originalTradesCount?: number;
+  _reducedTradesCount?: number;
+  _note?: string;
 } 

@@ -26,6 +26,12 @@ FROM node:lts-alpine
 
 WORKDIR /app
 
+# Устанавливаем NODE_ENV по умолчанию в production если не переопределена
+ENV NODE_ENV=production
+
+# Создаем необходимые директории
+RUN mkdir -p /app/public/portfolio-results
+
 # Копируем только необходимые артефакты из builder
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist

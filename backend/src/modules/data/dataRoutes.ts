@@ -22,6 +22,17 @@ router.get(
 );
 logger.info('[RouterInit] Route GET /trading-pairs registered.');
 
+// Роут для получения исторических данных свечей
+router.post(
+  '/candles',
+  (req, res) => dataController.getHistoricalCandles(req, res)
+);
+logger.info('[RouterInit] Route POST /candles registered.');
+
+// --- Endpoint для скачивания файлов результатов ---
+router.get('/portfolio-results/:filename', dataController.downloadPortfolioResults);
+logger.info('[RouterInit] Route GET /portfolio-results/:filename registered.');
+
 // --- Роуты для управления очередью --- 
 
 // Получение количества задач по статусам

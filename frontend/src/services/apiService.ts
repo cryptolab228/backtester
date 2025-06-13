@@ -35,6 +35,9 @@ export interface TradingPair {
   id: string; // или number, в зависимости от вашей модели
   symbol: string;
   exchange?: string; // Добавлено свойство для биржи
+  baseCurrency?: string;
+  quoteCurrency?: string;
+  instrumentType?: string;
   isSpot?: boolean;  // Добавлено свойство для определения спотовый/фьючерсный
   // другие поля, если есть, например, baseAsset, quoteAsset, etc.
 }
@@ -45,6 +48,7 @@ export interface FetchCandlesParams {
   startTime?: number;
   endTime?: number;
   limit?: number;
+  exchange?: string; // НОВОЕ: поддержка биржи
 }
 
 export interface QueuedJobInfo {
@@ -61,29 +65,35 @@ export interface JobCreationResponse {
 }
 
 /**
- * Запускает задачу получения списка торговых пар.
+ * Запускает задачу получения списка торговых пар с указанной биржи.
  */
-export const getAvailableTradingPairs = async (): Promise<TradingPair[]> => {
+export const getAvailableTradingPairs = async (exchange?: string): Promise<TradingPair[]> => {
   try {
-    console.log('[ApiService] Fetching available trading pairs...');
-    const response = await apiClient.get<TradingPair[]>('/data/trading-pairs');
-    console.log(`[ApiService] Successfully fetched ${response.data.length} trading pairs.`);
-    return response.data;
+    console.log(`[ApiService] Fetching available trading pairs${exchange ? ` for ${exchange}` : ''}...`);
+    const params = exchange ? { exchange } : {};
+    const response = await apiClient.get<{ success: boolean; data: TradingPair[]; count: number; exchange: string }>('/data/trading-pairs', { params });
+    
+    if (response.data.success) {
+      console.log(`[ApiService] Successfully fetched ${response.data.count} trading pairs${exchange ? ` for ${exchange}` : ''}.`);
+      return response.data.data;
+    } else {
+      throw new Error('API returned success: false');
+    }
   } catch (error: any) {
-    console.error('[ApiService] Error fetching trading pairs:', error.response?.data || error.message);
+    console.error(`[ApiService] Error fetching trading pairs${exchange ? ` for ${exchange}` : ''}:`, error.response?.data || error.message);
     throw error.response?.data || new Error('Failed to fetch trading pairs');
   }
 };
 
-export const triggerFetchPairsJob = async (): Promise<QueuedJobInfo> => {
+export const triggerFetchPairsJob = async (exchange: string = 'okx'): Promise<QueuedJobInfo> => {
   try {
-    console.log('[ApiService] Triggering fetch pairs job...');
-    const response = await apiClient.post<QueuedJobInfo>('/data/fetch-pairs', {});
-    console.log('[ApiService] Fetch pairs job triggered successfully:', response.data);
+    console.log(`[ApiService] Triggering fetch pairs job for ${exchange}...`);
+    const response = await apiClient.post<QueuedJobInfo>('/data/fetch-pairs', { exchange });
+    console.log(`[ApiService] Fetch pairs job triggered successfully for ${exchange}:`, response.data);
     return response.data;
   } catch (error: any) {
-    console.error('[ApiService] Error triggering fetch pairs job:', error.response?.data || error.message);
-    throw error.response?.data || new Error('Failed to trigger fetch pairs job');
+    console.error(`[ApiService] Error triggering fetch pairs job for ${exchange}:`, error.response?.data || error.message);
+    throw error.response?.data || new Error(`Failed to trigger fetch pairs job for ${exchange}`);
   }
 };
 

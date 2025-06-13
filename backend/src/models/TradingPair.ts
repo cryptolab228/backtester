@@ -2,13 +2,13 @@ import { Entity, PrimaryGeneratedColumn, Column, Index, OneToMany } from 'typeor
 import { Candle } from './Candle'; // Импортируем Candle для связи
 
 @Entity('trading_pairs')
-@Index(['symbol'], { unique: true }) // Уникальный индекс по символу
+@Index(['symbol', 'exchange'], { unique: true }) // Уникальный составной индекс по символу и бирже
 export class TradingPair {
   @PrimaryGeneratedColumn()
   id!: number;
 
-  @Column({ type: 'varchar', length: 50, unique: true })
-  symbol!: string; // Например, 'BTC-USDT-SWAP'
+  @Column({ type: 'varchar', length: 50 })
+  symbol!: string; // Например, 'BTC-USDT-SWAP' для OKX или 'BTCUSDT' для Bybit
 
   @Column({ type: 'varchar', length: 20 })
   baseCurrency!: string; // Например, 'BTC'
@@ -18,6 +18,9 @@ export class TradingPair {
 
   @Column({ type: 'varchar', length: 20 })
   instrumentType!: string; // Например, 'SWAP' или 'FUTURES'
+
+  @Column({ type: 'varchar', length: 20, default: 'okx' })
+  exchange!: string; // 'okx' | 'bybit' - новое поле для поддержки мультибиржевости
 
   @Column({ type: 'timestamp with time zone', default: () => 'CURRENT_TIMESTAMP' })
   createdAt!: Date;

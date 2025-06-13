@@ -1,18 +1,95 @@
 <template>
-  <div class="portfolio-results-display">
-    <div v-if="portfolioResults" class="space-y-6">
-      <!-- Предупреждение о парах без данных -->
-      <div v-if="pairsWithoutData.length > 0" class="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+  <div class="portfolio-results-display space-y-6">
+    <div v-if="portfolioResults">
+      
+      <!-- Уведомление о большом файле результатов -->
+      <div v-if="portfolioResults._largeDataSavedToFile" class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
         <div class="flex items-start">
-          <i class="pi pi-exclamation-triangle text-yellow-600 mt-1 mr-2"></i>
-          <div>
-            <h4 class="text-sm font-medium text-yellow-800 mb-1">Внимание: Недостающие данные</h4>
-            <p class="text-sm text-yellow-700">
-              Для следующих пар отсутствуют данные в портфельном тесте: 
-              <strong>{{ pairsWithoutData.join(', ') }}</strong>
+          <i class="pi pi-info-circle text-blue-600 text-xl mr-3 mt-1"></i>
+          <div class="flex-1">
+            <h4 class="text-lg font-medium text-blue-900 mb-2">Результаты сохранены в файл</h4>
+            <p class="text-blue-700 mb-3">
+              Результаты портфельного бэктеста очень объемные ({{portfolioResults._fullDataSize}}) и были сохранены в файл. 
+              Ниже показан предварительный просмотр основных метрик.
             </p>
-            <p class="text-xs text-yellow-600 mt-1">
-              Это может повлиять на точность результатов портфеля. Рекомендуется загрузить недостающие данные.
+            <div class="flex items-center space-x-4 flex-wrap gap-2">
+              <Button 
+                @click="handleDownload"
+                :loading="downloadState.isDownloading"
+                :disabled="downloadState.isDownloading"
+                severity="info"
+                size="small"
+                class="flex items-center"
+              >
+                <i class="pi pi-download mr-2"></i>
+                {{ downloadState.isDownloading ? 'Скачивание...' : 'Скачать полные результаты' }}
+              </Button>
+              
+              <Button 
+                @click="testFileAccess"
+                severity="secondary"
+                size="small"
+                outlined
+                class="flex items-center"
+                v-tooltip.top="'Проверить доступность файла'"
+              >
+                <i class="pi pi-search mr-2"></i>
+                Тест доступности
+              </Button>
+              
+              <span class="text-sm text-blue-600">
+                Размер файла: {{portfolioResults._fullDataSize}}
+              </span>
+            </div>
+            
+            <!-- Прогресс скачивания -->
+            <div v-if="downloadState.isDownloading" class="mt-4">
+              <div class="flex justify-between text-sm text-blue-700 mb-1">
+                <span>Скачивание...</span>
+                <span v-if="downloadState.progress > 0">{{ downloadState.progress.toFixed(1) }}%</span>
+              </div>
+              <ProgressBar 
+                :value="downloadState.progress" 
+                :showValue="false"
+                style="height: 6px;"
+              />
+              <div v-if="downloadState.downloadedMB > 0" class="text-xs text-blue-600 mt-1">
+                Загружено: {{ downloadState.downloadedMB.toFixed(1) }}MB / {{ downloadState.totalMB.toFixed(1) }}MB
+              </div>
+            </div>
+            
+            <!-- Результат тестирования -->
+            <div v-if="testResult" class="mt-4 p-3 rounded" :class="testResult.accessible ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'">
+              <div class="flex items-center">
+                <i :class="testResult.accessible ? 'pi pi-check-circle text-green-600' : 'pi pi-times-circle text-red-600'" class="mr-2"></i>
+                <span :class="testResult.accessible ? 'text-green-800' : 'text-red-800'" class="font-medium">
+                  {{ testResult.accessible ? 'Файл доступен для скачивания' : 'Файл недоступен' }}
+                </span>
+              </div>
+              <div v-if="testResult.accessible" class="text-xs text-green-700 mt-1">
+                Размер: {{ testResult.sizeMB }}MB | Тип: {{ testResult.contentType }}
+              </div>
+              <div v-else class="text-xs text-red-700 mt-1">
+                Ошибка: {{ testResult.error || `HTTP ${testResult.status}` }}
+              </div>
+            </div>
+            
+            <p class="text-sm text-blue-600 mt-2">
+              {{portfolioResults._previewNote}}
+            </p>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Уведомление о сокращенных данных -->
+      <div v-if="portfolioResults._dataReduced" class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+        <div class="flex items-start">
+          <i class="pi pi-exclamation-triangle text-yellow-600 text-lg mr-3 mt-1"></i>
+          <div>
+            <h4 class="text-sm font-medium text-yellow-800 mb-1">Данные сокращены</h4>
+            <p class="text-sm text-yellow-700">
+              Отображаются сокращенные результаты ({{portfolioResults._reducedTradesCount || 0}} из {{portfolioResults._originalTradesCount || 0}} сделок).
+              {{portfolioResults._note}}
             </p>
           </div>
         </div>
@@ -24,29 +101,29 @@
           <i class="pi pi-chart-pie mr-2 text-blue-600"></i>
           Общие результаты портфеля
         </h3>
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div class="bg-gradient-to-r from-green-50 to-green-100 p-4 rounded-lg">
-            <div class="text-sm text-green-600 font-medium">Общий PnL</div>
-            <div class="text-2xl font-bold" :class="portfolioResults.overallMetrics.totalPortfolioPnl >= 0 ? 'text-green-700' : 'text-red-700'">
-              ${{ portfolioResults.overallMetrics.totalPortfolioPnl.toFixed(2) }}
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div class="bg-blue-50 p-4 rounded-lg">
+            <div class="text-sm text-blue-600">Общий PnL</div>
+            <div class="text-2xl font-bold" :class="totalPnl >= 0 ? 'text-green-600' : 'text-red-600'">
+              ${{ totalPnl.toFixed(2) }}
             </div>
           </div>
-          <div class="bg-gradient-to-r from-blue-50 to-blue-100 p-4 rounded-lg">
-            <div class="text-sm text-blue-600 font-medium">Всего сделок</div>
-            <div class="text-2xl font-bold text-blue-700">
-              {{ portfolioResults.overallMetrics.totalPortfolioTrades }}
+          <div class="bg-green-50 p-4 rounded-lg">
+            <div class="text-sm text-green-600">Всего сделок</div>
+            <div class="text-2xl font-bold text-green-700">
+              {{ totalTrades }}
             </div>
           </div>
-          <div class="bg-gradient-to-r from-purple-50 to-purple-100 p-4 rounded-lg">
-            <div class="text-sm text-purple-600 font-medium">Винрейт</div>
+          <div class="bg-purple-50 p-4 rounded-lg">
+            <div class="text-sm text-purple-600">Винрейт</div>
             <div class="text-2xl font-bold text-purple-700">
-              {{ (portfolioResults.overallMetrics.portfolioWinRate * 100).toFixed(1) }}%
+              {{ winRate.toFixed(1) }}%
             </div>
           </div>
-          <div class="bg-gradient-to-r from-orange-50 to-orange-100 p-4 rounded-lg">
-            <div class="text-sm text-orange-600 font-medium">Sharpe Ratio</div>
+          <div class="bg-orange-50 p-4 rounded-lg">
+            <div class="text-sm text-orange-600">Profit Factor</div>
             <div class="text-2xl font-bold text-orange-700">
-              {{ portfolioResults.overallMetrics.sharpeRatioPortfolio.toFixed(2) }}
+              {{ profitFactor.toFixed(2) }}
             </div>
           </div>
         </div>
@@ -158,47 +235,263 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import DataTable from 'primevue/datatable';
 import Column from 'primevue/column';
 import Badge from 'primevue/badge';
 import ProgressBar from 'primevue/progressbar';
+import Button from 'primevue/button';
 import type { PortfolioBacktestResult } from '@/types/strategy';
+import { 
+  downloadPortfolioResults, 
+  testFileAccess as testFile, 
+  getPortfolioDownloadUrls,
+  type ProgressCallback,
+  type FileAccessTestResult,
+  type DownloadResult
+} from '@/utils/downloadHelper';
+import { useToast } from 'primevue/usetoast';
 
 interface Props {
   portfolioResults: PortfolioBacktestResult | null;
 }
 
 const props = defineProps<Props>();
+const toast = useToast();
+
+// Состояние скачивания и тестирования
+const downloadState = ref({
+  isDownloading: false,
+  progress: 0,
+  downloadedMB: 0,
+  totalMB: 0,
+});
+
+const testResult = ref<{ 
+  accessible: boolean; 
+  sizeMB?: number; 
+  contentType?: string; 
+  error?: string; 
+  status?: number;
+  testedUrl?: string;
+} | null>(null);
+
+// ДИАГНОСТИКА: Логируем данные при изменении portfolioResults
+watch(() => props.portfolioResults, (newResults) => {
+  if (newResults) {
+    console.log('[PortfolioResultsDisplay] Portfolio results received:', {
+      overallMetrics: {
+        totalPortfolioTrades: newResults.overallMetrics?.totalPortfolioTrades,
+        totalPortfolioPnl: newResults.overallMetrics?.totalPortfolioPnl,
+        winRate: newResults.overallMetrics?.portfolioWinRate
+      },
+      tradesByPair: Object.fromEntries(
+        Object.entries(newResults.tradesByPair || {}).map(([pair, trades]) => [
+          pair, 
+          { 
+            count: trades?.length || 0, 
+            pnl: trades?.reduce((sum, trade) => sum + (trade?.pnl || 0), 0) || 0 
+          }
+        ])
+      ),
+      metricsByPair: Object.fromEntries(
+        Object.entries(newResults.metricsByPair || {}).map(([pair, metrics]) => [
+          pair,
+          { 
+            totalTrades: metrics?.totalTrades || 0, 
+            totalPnl: metrics?.totalPnl || 0 
+          }
+        ])
+      ),
+      flags: {
+        dataReduced: newResults._dataReduced,
+        originalTradesCount: newResults._originalTradesCount,
+        reducedTradesCount: newResults._reducedTradesCount,
+        largeDataSavedToFile: newResults._largeDataSavedToFile,
+        fullDataSize: newResults._fullDataSize,
+        note: newResults._note
+      }
+    });
+  }
+}, { immediate: true });
+
+// Извлекаем имя файла из downloadUrl
+const getFilenameFromDownloadUrl = (downloadUrl: string): string => {
+  try {
+    const url = new URL(downloadUrl, window.location.origin);
+    const pathParts = url.pathname.split('/');
+    return pathParts[pathParts.length - 1];
+  } catch (error) {
+    console.warn('Failed to extract filename from URL:', downloadUrl);
+    // Fallback - используем timestamp
+    return `portfolio-backtest-${Date.now()}.json`;
+  }
+};
+
+// Реализация функции скачивания файла
+const handleDownload = async (): Promise<void> => {
+  if (!props.portfolioResults?._downloadUrl) {
+    toast.add({
+      severity: 'error',
+      summary: 'Ошибка скачивания',
+      detail: 'URL для скачивания не найден',
+      life: 5000
+    });
+    return;
+  }
+
+  try {
+    downloadState.value = {
+      isDownloading: true,
+      progress: 0,
+      downloadedMB: 0,
+      totalMB: 0,
+    };
+
+    const filename = getFilenameFromDownloadUrl(props.portfolioResults._downloadUrl);
+    console.log(`🎯 Starting portfolio results download: ${filename}`);
+
+    const progressCallback: ProgressCallback = (progress: number, downloaded: number, total: number) => {
+      downloadState.value.progress = progress;
+      downloadState.value.downloadedMB = downloaded / (1024 * 1024);
+      downloadState.value.totalMB = total / (1024 * 1024);
+    };
+
+    const result: DownloadResult = await downloadPortfolioResults(filename, progressCallback);
+
+    console.log(`✅ Download completed:`, result);
+    
+    toast.add({
+      severity: 'success',
+      summary: 'Скачивание завершено',
+      detail: `Файл "${result.filename}" успешно скачан (${(result.size / 1024 / 1024).toFixed(2)}MB)`,
+      life: 5000
+    });
+
+  } catch (error: any) {
+    console.error('❌ Download failed:', error);
+    
+    toast.add({
+      severity: 'error',
+      summary: 'Ошибка скачивания',
+      detail: error.message || 'Произошла ошибка при скачивании файла',
+      life: 8000
+    });
+  } finally {
+    downloadState.value.isDownloading = false;
+  }
+};
+
+// Реализация функции тестирования доступности файла
+const testFileAccess = async (): Promise<void> => {
+  if (!props.portfolioResults?._downloadUrl) {
+    toast.add({
+      severity: 'error',
+      summary: 'Ошибка тестирования',
+      detail: 'URL для тестирования не найден',
+      life: 5000
+    });
+    return;
+  }
+
+  try {
+    const filename = getFilenameFromDownloadUrl(props.portfolioResults._downloadUrl);
+    const urls = getPortfolioDownloadUrls(filename);
+    
+    console.log(`🧪 Testing file access for: ${filename}`);
+    console.log(`📍 Testing URLs:`, urls);
+
+    // Тестируем API endpoint первым
+    const testApiResult: FileAccessTestResult = await testFile(urls.api);
+    
+    if (testApiResult.accessible) {
+      testResult.value = {
+        accessible: true,
+        sizeMB: testApiResult.headers.contentLength ? 
+          parseFloat((parseInt(testApiResult.headers.contentLength) / 1024 / 1024).toFixed(2)) : 
+          undefined,
+        contentType: testApiResult.headers.contentType || undefined,
+        status: testApiResult.status,
+        testedUrl: urls.api
+      };
+      
+      toast.add({
+        severity: 'success',
+        summary: 'Файл доступен',
+        detail: `Файл доступен через API endpoint (${testResult.value.sizeMB}MB)`,
+        life: 5000
+      });
+    } else {
+      // Если API не работает, пробуем статический endpoint
+      const testStaticResult: FileAccessTestResult = await testFile(urls.static);
+      
+      if (testStaticResult.accessible) {
+        testResult.value = {
+          accessible: true,
+          sizeMB: testStaticResult.headers.contentLength ? 
+            parseFloat((parseInt(testStaticResult.headers.contentLength) / 1024 / 1024).toFixed(2)) : 
+            undefined,
+          contentType: testStaticResult.headers.contentType || undefined,
+          status: testStaticResult.status,
+          testedUrl: urls.static
+        };
+        
+        toast.add({
+          severity: 'success',
+          summary: 'Файл доступен',
+          detail: `Файл доступен через статический endpoint (${testResult.value.sizeMB}MB)`,
+          life: 5000
+        });
+      } else {
+        testResult.value = {
+          accessible: false,
+          error: testApiResult.error || `HTTP ${testApiResult.status}`,
+          status: testApiResult.status,
+          testedUrl: urls.api
+        };
+        
+        toast.add({
+          severity: 'error',
+          summary: 'Файл недоступен',
+          detail: `Не удалось получить доступ к файлу: ${testResult.value.error}`,
+          life: 8000
+        });
+      }
+    }
+
+  } catch (error: any) {
+    console.error('❌ File access test failed:', error);
+    
+    testResult.value = {
+      accessible: false,
+      error: error.message || 'Неизвестная ошибка'
+    };
+    
+    toast.add({
+      severity: 'error',
+      summary: 'Ошибка тестирования',
+      detail: error.message || 'Произошла ошибка при тестировании доступности файла',
+      life: 8000
+    });
+  }
+};
 
 // Вычисляем ROI
-const calculateROI = () => {
+const calculateROI = (): number => {
   if (!props.portfolioResults) return 0;
   const initial = props.portfolioResults.overallMetrics.initialPortfolioCapital;
   const final = props.portfolioResults.overallMetrics.finalPortfolioCapital;
   return ((final - initial) / initial) * 100;
 };
 
-// Определяем пары без данных
-const pairsWithoutData = computed(() => {
-  if (!props.portfolioResults) return [];
-  
-  const configuredPairs = props.portfolioResults.configUsed?.pairSymbols || [];
-  const pairsWithTrades = Object.keys(props.portfolioResults.tradesByPair);
-  
-  return configuredPairs.filter(pair => 
-    !pairsWithTrades.includes(pair) || 
-    props.portfolioResults!.tradesByPair[pair].length === 0
-  );
-});
-
-// Подготавливаем данные для таблицы по парам
+// Подготавливаем данные для таблицы по парам - используем metricsByPair как источник истины
 const pairSummaryData = computed(() => {
-  if (!props.portfolioResults || !props.portfolioResults.tradesByPair) return [];
+  if (!props.portfolioResults || !props.portfolioResults.metricsByPair) return [];
   
   try {
-    return Object.entries(props.portfolioResults.tradesByPair).map(([pair, trades]) => {
-      if (!trades || !Array.isArray(trades)) {
+    // Используем metricsByPair как источник правильных данных
+    return Object.entries(props.portfolioResults.metricsByPair).map(([pair, metrics]) => {
+      if (!metrics) {
         return {
           pair: pair || 'Unknown',
           trades: 0,
@@ -209,25 +502,90 @@ const pairSummaryData = computed(() => {
         };
       }
 
-      const metrics = props.portfolioResults?.metricsByPair?.[pair];
-      const pnl = trades.reduce((sum, trade) => sum + (trade?.pnl || 0), 0);
-      const winningTrades = trades.filter(trade => (trade?.pnl || 0) > 0).length;
-      const winRate = trades.length > 0 ? winningTrades / trades.length : 0;
-      const avgTrade = trades.length > 0 ? pnl / trades.length : 0;
+      // Используем данные из metricsByPair (они НЕ сжаты)
+      const tradesCount = metrics.totalTrades || 0;
+      const pnl = metrics.totalPnl || 0;
+      const winRate = metrics.winRate || 0;
+      const avgTrade = tradesCount > 0 ? pnl / tradesCount : 0;
+      const profitFactor = metrics.profitFactor || 0;
       
       return {
-        pair: pair || 'Unknown',
-        trades: trades.length || 0,
-        pnl: pnl || 0,
-        winRate: winRate || 0,
-        avgTrade: avgTrade || 0,
-        profitFactor: metrics?.profitFactor || 0,
+        pair: pair,
+        trades: tradesCount,
+        pnl: pnl,
+        winRate: winRate,
+        avgTrade: avgTrade,
+        profitFactor: profitFactor,
       };
     });
   } catch (error) {
     console.error('Error processing pair summary data:', error);
     return [];
   }
+});
+
+// Простые вычисления общих метрик из metricsByPair
+const totalTrades = computed(() => {
+  if (!props.portfolioResults || !props.portfolioResults.metricsByPair) return 0;
+  
+  return Object.values(props.portfolioResults.metricsByPair).reduce((sum, metrics) => {
+    return sum + (metrics?.totalTrades || 0);
+  }, 0);
+});
+
+const totalPnl = computed(() => {
+  if (!props.portfolioResults || !props.portfolioResults.metricsByPair) return 0;
+  
+  return Object.values(props.portfolioResults.metricsByPair).reduce((sum, metrics) => {
+    return sum + (metrics?.totalPnl || 0);
+  }, 0);
+});
+
+const winRate = computed(() => {
+  if (!props.portfolioResults || !props.portfolioResults.metricsByPair) return 0;
+  
+  let totalTradesCount = 0;
+  let weightedWinRateSum = 0;
+  
+  Object.values(props.portfolioResults.metricsByPair).forEach(metrics => {
+    if (metrics && metrics.totalTrades && metrics.winRate !== undefined) {
+      const pairTrades = metrics.totalTrades;
+      const pairWinRate = metrics.winRate;
+      
+      totalTradesCount += pairTrades;
+      weightedWinRateSum += pairWinRate * pairTrades;
+    }
+  });
+  
+  return totalTradesCount > 0 ? (weightedWinRateSum / totalTradesCount) * 100 : 0;
+});
+
+const profitFactor = computed(() => {
+  if (!props.portfolioResults || !props.portfolioResults.metricsByPair) return 0;
+  
+  let totalGrossProfit = 0;
+  let totalGrossLoss = 0;
+  
+  Object.values(props.portfolioResults.metricsByPair).forEach(metrics => {
+    if (metrics) {
+      const pairPnl = metrics.totalPnl || 0;
+      const pairProfitFactor = metrics.profitFactor || 0;
+      
+      if (pairPnl > 0 && pairProfitFactor > 0) {
+        // Примерное вычисление grossProfit и grossLoss из PnL и Profit Factor
+        const grossLoss = pairPnl / (pairProfitFactor - 1);
+        const grossProfit = pairPnl + grossLoss;
+        
+        if (grossLoss > 0) {
+          totalGrossProfit += grossProfit;
+          totalGrossLoss += grossLoss;
+        }
+      }
+    }
+  });
+  
+  return totalGrossLoss > 0 ? totalGrossProfit / totalGrossLoss : 
+         (totalGrossProfit > 0 ? Infinity : 0);
 });
 </script>
 

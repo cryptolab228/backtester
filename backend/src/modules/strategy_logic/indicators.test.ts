@@ -200,11 +200,11 @@ describe('calculateNWE', () => {
 
   it('should calculate NWE bands correctly for a simple case', () => {
     const candles: CandleData[] = [
-      createNweTestCandle(10, 8, 9),    // i=0
-      createNweTestCandle(12, 10, 11),  // i=1
-      createNweTestCandle(11, 9, 10),   // i=2
-      createNweTestCandle(13, 11, 12),  // i=3
-      createNweTestCandle(12, 10, 10),  // i=4
+      createNweTestCandle(10, 8, 9),    // i=0, TR=2, ATR=undefined
+      createNweTestCandle(12, 10, 11),  // i=1, TR=2, ATR=(2+2)/2=2
+      createNweTestCandle(11, 9, 10),   // i=2, TR=2, ATR=(2+2)/2=2, SMA_close(lookback=2)=(11+10)/2=10.5
+      createNweTestCandle(13, 11, 12),  // i=3, TR=2, ATR=(2+2)/2=2, SMA_close(lookback=2)=(10+12)/2=11
+      createNweTestCandle(12, 10, 10),  // i=4, TR=2, ATR=(2+2)/2=2, SMA_close(lookback=2)=(12+10)/2=11
     ];
     const params: NWECalculationParams = { 
       lookbackPeriod: 2, 
@@ -219,17 +219,21 @@ describe('calculateNWE', () => {
     expect(result[0].nweUpper).toBeNull();
     expect(result[0].nweLower).toBeNull();
 
-    expect(result[1].nweUpper).toBeCloseTo(12.5, 5);
-    expect(result[1].nweLower).toBeCloseTo(7.5, 5);
+    // ATR=2, SMA_close=(9+11)/2=10, offset=2*1*1=2
+    expect(result[1].nweUpper).toBeCloseTo(12, 5);
+    expect(result[1].nweLower).toBeCloseTo(8, 5);
 
-    expect(result[2].nweUpper).toBeCloseTo(12.25, 5);
-    expect(result[2].nweLower).toBeCloseTo(8.75, 5);
+    // ATR=2, SMA_close=(11+10)/2=10.5, offset=2*1*1=2
+    expect(result[2].nweUpper).toBeCloseTo(12.5, 5);
+    expect(result[2].nweLower).toBeCloseTo(8.5, 5);
 
-    expect(result[3].nweUpper).toBeCloseTo(13.125, 5);
-    expect(result[3].nweLower).toBeCloseTo(8.875, 5);
+    // ATR=2, SMA_close=(10+12)/2=11, offset=2*1*1=2
+    expect(result[3].nweUpper).toBeCloseTo(13, 5);
+    expect(result[3].nweLower).toBeCloseTo(9, 5);
     
-    expect(result[4].nweUpper).toBeCloseTo(12.5625, 5);
-    expect(result[4].nweLower).toBeCloseTo(8.4375, 5);
+    // ATR=2, SMA_close=(12+10)/2=11, offset=2*1*1=2
+    expect(result[4].nweUpper).toBeCloseTo(13, 5);
+    expect(result[4].nweLower).toBeCloseTo(9, 5);
   });
 
   it('should handle ATR being zero initially', () => {

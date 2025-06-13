@@ -4,6 +4,9 @@ import { JOB_TYPES } from '@/jobs/dataWorker';
 import logger from '@/utils/logger';
 import { Job, JobType } from 'bullmq';
 import { dataService } from '@/services/dataService';
+import path from 'path';
+import fs from 'fs';
+import { getPortfolioResultsFilePath } from '@/utils/paths';
 
 // --- Вынесенная логика для получения данных об очередях --- 
 
@@ -114,13 +117,19 @@ class DataController {
    */
   async triggerFetchPairs(req: Request, res: Response): Promise<void> {
     try {
-      logger.info(`[Controller] Attempting to add job ${JOB_TYPES.FETCH_PAIRS}...`);
-      const job = await dataQueue.add(JOB_TYPES.FETCH_PAIRS, {});
+      const { exchange = 'okx' } = req.body;  // НОВОЕ: поддержка биржи
+      
+      logger.info(`[Controller] Attempting to add job ${JOB_TYPES.FETCH_PAIRS} for exchange: ${exchange}...`);
+      const job = await dataQueue.add(JOB_TYPES.FETCH_PAIRS, { exchange });
       logger.info(`[Controller] dataQueue.add call completed for ${JOB_TYPES.FETCH_PAIRS}. Returned job object: ${JSON.stringify(job)}`);
 
       if (job && job.id) {
-        logger.info(`[Controller] Successfully added job ${JOB_TYPES.FETCH_PAIRS} with ID: ${job.id} to the queue.`);
-        res.status(202).json({ message: 'Fetch pairs job added to the queue.', jobId: job.id });
+        logger.info(`[Controller] Successfully added job ${JOB_TYPES.FETCH_PAIRS} with ID: ${job.id} to the queue for ${exchange}.`);
+        res.status(202).json({ 
+          message: `Fetch pairs job added to the queue for ${exchange}.`, 
+          jobId: job.id,
+          exchange 
+        });
       } else {
         logger.error(`[Controller] dataQueue.add for ${JOB_TYPES.FETCH_PAIRS} returned an unexpected result. Job object: ${JSON.stringify(job)}`);
         res.status(500).json({ message: 'Failed to add fetch pairs job due to unexpected queue response.' });
@@ -135,11 +144,11 @@ class DataController {
 
   /**
    * Добавляет задачу на получение исторических свечей.
-   * Принимает параметры из тела запроса: symbol, timeframes (массив строк), startTime?, endTime?, limit?
+   * Принимает параметры из тела запроса: symbol, timeframes (массив строк), startTime?, endTime?, limit?, exchange?
    */
   async triggerFetchCandles(req: Request, res: Response): Promise<void> {
     logger.info(`[Controller] Received request to fetch candles. Body: ${JSON.stringify(req.body)}`);
-    const { symbol, timeframes, startTime, endTime, limit } = req.body;
+    const { symbol, timeframes, startTime, endTime, limit, exchange = 'okx' } = req.body;  // НОВОЕ: поддержка биржи
 
     if (!symbol || !timeframes || !Array.isArray(timeframes) || timeframes.length === 0) {
       res.status(400).json({ message: 'Missing or invalid required parameters: symbol (string) and timeframes (non-empty array of strings).' });
@@ -151,7 +160,7 @@ class DataController {
 
     for (const timeframe of timeframes) {
       if (typeof timeframe !== 'string' || timeframe.trim() === '') {
-        logger.warn(`[Controller] Invalid timeframe value "${timeframe}" for symbol ${symbol}. Skipping.`);
+        logger.warn(`[Controller] Invalid timeframe value "${timeframe}" for symbol ${symbol} on ${exchange}. Skipping.`);
         continue; 
       }
 
@@ -161,19 +170,20 @@ class DataController {
         startTime: startTime ? parseInt(startTime, 10) : undefined,
         endTime: endTime ? parseInt(endTime, 10) : undefined,
         limit: limit ? parseInt(limit, 10) : undefined,
+        exchange,  // НОВОЕ: добавляем биржу в данные задачи
       };
 
       try {
-        logger.info(`[Controller] Attempting to add job ${JOB_TYPES.FETCH_CANDLES} for ${symbol} (${jobData.timeframe}) with data: ${JSON.stringify(jobData)}.`);
+        logger.info(`[Controller] Attempting to add job ${JOB_TYPES.FETCH_CANDLES} for ${symbol} (${jobData.timeframe}) on ${exchange} with data: ${JSON.stringify(jobData)}.`);
         const jobPromise = dataQueue.add(JOB_TYPES.FETCH_CANDLES, jobData);
         jobPromises.push(jobPromise);
       } catch (error: any) {
-        logger.error(`[Controller] Error synchronously adding job ${JOB_TYPES.FETCH_CANDLES} for ${symbol} (${jobData.timeframe}): ${error.message}`, { stack: error.stack, jobData });
+        logger.error(`[Controller] Error synchronously adding job ${JOB_TYPES.FETCH_CANDLES} for ${symbol} (${jobData.timeframe}) on ${exchange}: ${error.message}`, { stack: error.stack, jobData });
       }
     }
 
     if (jobPromises.length === 0 && timeframes.length > 0) {
-        logger.warn(`[Controller] No valid timeframes provided for symbol ${symbol} after filtering. Request body: ${JSON.stringify(req.body)}`);
+        logger.warn(`[Controller] No valid timeframes provided for symbol ${symbol} on ${exchange} after filtering. Request body: ${JSON.stringify(req.body)}`);
         res.status(400).json({ message: 'No valid timeframes provided to process.' });
         return;
     }
@@ -192,35 +202,41 @@ class DataController {
           const job = result.value;
           if (job && job.id) {
             createdJobIds.push(job.id);
-            logger.info(`[Controller] Successfully added job ${JOB_TYPES.FETCH_CANDLES} for ${symbol} (${currentTf}) with ID: ${job.id} to the queue.`);
+            logger.info(`[Controller] Successfully added job ${JOB_TYPES.FETCH_CANDLES} for ${symbol} (${currentTf}) on ${exchange} with ID: ${job.id} to the queue.`);
           } else {
             allJobsSuccessfullyQueued = false;
-            logger.error(`[Controller] dataQueue.add for ${symbol} (${currentTf}) returned an unexpected result (no job or no job.id). Job object: ${JSON.stringify(job)}`);
+            logger.error(`[Controller] Job ${JOB_TYPES.FETCH_CANDLES} for ${symbol} (${currentTf}) on ${exchange} was resolved but with unexpected job object: ${JSON.stringify(job)}`);
           }
         } else {
           allJobsSuccessfullyQueued = false;
-          logger.error(`[Controller] Failed to add job ${JOB_TYPES.FETCH_CANDLES} for ${symbol} (${currentTf}): ${result.reason.message}`, { stack: result.reason.stack });
+          logger.error(`[Controller] Job ${JOB_TYPES.FETCH_CANDLES} for ${symbol} (${currentTf}) on ${exchange} was rejected with reason: ${result.reason}`);
         }
       });
 
-      if (createdJobIds.length > 0) {
-        const message = `Successfully added ${createdJobIds.length} fetch candles job(s) to the queue.` +
-                        (allJobsSuccessfullyQueued ? '' : ` Some jobs may have failed to queue (Total attempted: ${jobPromises.length}). Check logs.`);
+      if (allJobsSuccessfullyQueued && createdJobIds.length === timeframes.length) {
         res.status(202).json({ 
-            message,
+          message: `Fetch candles jobs added to the queue for ${symbol} on ${exchange}.`, 
             jobIds: createdJobIds,
-            totalAttempted: jobPromises.length,
-            totalSuccessfullyQueued: createdJobIds.length
+          symbol,
+          exchange,
+          timeframes 
         });
+        logger.info(`[Controller] All ${JOB_TYPES.FETCH_CANDLES} jobs for ${symbol} on ${exchange} (${timeframes.length} timeframes) successfully queued.`);
       } else {
-        logger.error(`[Controller] Failed to queue any fetch candles jobs for symbol ${symbol} with timeframes [${timeframes.join(', ')}]`);
-        res.status(500).json({ message: 'Failed to add any fetch candles jobs to the queue. Check server logs.' });
+        res.status(207).json({ 
+          message: `Partially successful. Some fetch candles jobs for ${symbol} on ${exchange} may have failed.`, 
+          jobIds: createdJobIds,
+          symbol,
+          exchange,
+          requestedTimeframes: timeframes,
+          successfulJobsCount: createdJobIds.length 
+        });
+        logger.warn(`[Controller] Partial success for ${JOB_TYPES.FETCH_CANDLES} jobs for ${symbol} on ${exchange}. ${createdJobIds.length}/${timeframes.length} jobs successfully queued.`);
       }
-
     } catch (error: any) {
-      logger.error(`[Controller] General error during queuing multiple fetch candles jobs for ${symbol}: ${error.message}`, { stack: error.stack });
+      logger.error(`[Controller] Error during Promise.allSettled for ${JOB_TYPES.FETCH_CANDLES} jobs for ${symbol} on ${exchange}: ${error.message}`, { stack: error.stack });
       if (!res.headersSent) {
-        res.status(500).json({ message: 'General error processing fetch candles jobs', error: error.message });
+        res.status(500).json({ message: `Failed to add some fetch candles jobs for ${symbol} on ${exchange}`, error: error.message });
       }
     }
   }
@@ -339,14 +355,31 @@ class DataController {
     }
   }
 
+  /**
+   * Получает все торговые пары с возможностью фильтрации по бирже.
+   */
   async getAllTradingPairs(req: Request, res: Response): Promise<void> {
-    logger.info('[DataController] Received request to get all trading pairs.');
     try {
-      const pairs = await dataService.getAllTradingPairs();
-      res.status(200).json(pairs);
+      const { exchange } = req.query;  // НОВОЕ: поддержка фильтрации по бирже
+      
+      logger.info(`Fetching all trading pairs${exchange ? ` for ${exchange}` : ''}...`);
+      const pairs = await dataService.getAllTradingPairs(exchange as string);
+      
+      res.status(200).json({
+        success: true,
+        data: pairs,
+        count: pairs.length,
+        exchange: exchange || 'all'
+      });
+      
+      logger.info(`Successfully returned ${pairs.length} trading pairs${exchange ? ` for ${exchange}` : ''}.`);
     } catch (error: any) {
-      logger.error('[DataController] Error fetching all trading pairs:', error);
-      res.status(500).json({ message: 'Error fetching trading pairs', error: error.message });
+      logger.error(`Error fetching trading pairs${(req.query.exchange as string) ? ` for ${req.query.exchange}` : ''}:`, error);
+      res.status(500).json({ 
+        success: false,
+        message: 'Failed to fetch trading pairs', 
+        error: error.message 
+      });
     }
   }
 
@@ -365,10 +398,14 @@ class DataController {
       const currentState = await job.getState();
       logger.debug(`[Controller][pauseJob] Current state for job ${jobId}: ${currentState}`);
 
-      // Разрешаем паузу только для waiting или wait
-      if (currentState !== 'waiting' && currentState !== 'wait') {
-        logger.warn(`[Controller][pauseJob] Job ${jobId} cannot be paused from state: ${currentState}. Only waiting/wait allowed.`);
-        res.status(400).json({ message: `Job cannot be paused from state: ${currentState}. Only waiting/wait allowed.` });
+      // Разрешаем паузу для разных состояний, не только waiting/wait
+      const pausableStates = ['waiting', 'wait', 'active', 'delayed'];
+      if (!pausableStates.includes(currentState)) {
+        logger.warn(`[Controller][pauseJob] Job ${jobId} cannot be paused from state: ${currentState}. Allowed states: ${pausableStates.join(', ')}`);
+        res.status(400).json({ 
+          message: `Job cannot be paused from state: ${currentState}. Allowed states: ${pausableStates.join(', ')}`,
+          currentState 
+        });
         return;
       }
 
@@ -379,8 +416,17 @@ class DataController {
       logger.debug(`[Controller][pauseJob] Updating job ${jobId} data with isUserPaused=true:`, currentData);
       await (job as any).update(currentData); // Используем as any для update
 
-      logger.info(`[Controller][pauseJob] Job ${jobId} marked as paused via data flag.`);
-      res.status(200).json({ message: 'Job marked as paused. It will be skipped by the worker.' });
+      // Проверяем финальное состояние
+      const finalState = await job.getState();
+      const finalData = await job.data;
+
+      logger.info(`[Controller][pauseJob] Job ${jobId} marked as paused via data flag. State: ${currentState} -> ${finalState}`);
+      res.status(200).json({ 
+        message: 'Job marked as paused. It will be skipped by the worker.', 
+        previousState: currentState,
+        finalState: finalState,
+        jobData: finalData
+      });
     } catch (error: any) {
       logger.error(`[Controller][pauseJob] Error marking job ${jobId} as paused:`, error);
       res.status(500).json({ message: error.message || 'Internal server error while marking job as paused' });
@@ -402,20 +448,21 @@ class DataController {
       const currentState = await job.getState();
       logger.debug(`[Controller][resumeJob] Current state for job ${jobId}: ${currentState}`);
       const currentData = job.data || {};
+      logger.debug(`[Controller][resumeJob] Current data for job ${jobId}:`, currentData);
 
       // Проверяем, был ли установлен флаг
       if (currentData.isUserPaused !== true) {
-          logger.warn(`[Controller][resumeJob] Job ${jobId} was not marked as paused via data flag. Cannot resume.`);
-          // Возвращаем 200 OK, так как технически нет ошибки, просто нечего делать
-          // Или можно вернуть 400, если считаем это ошибкой клиента
-          res.status(200).json({ message: 'Job was not paused via data flag.' });
+          logger.warn(`[Controller][resumeJob] Job ${jobId} was not marked as paused via data flag. Current isUserPaused value: ${currentData.isUserPaused}`);
+          res.status(200).json({ 
+            message: 'Job was not paused via data flag.', 
+            currentState,
+            isUserPaused: currentData.isUserPaused 
+          });
           return;
       }
 
       // Удаляем флаг (или устанавливаем в false)
       delete currentData.isUserPaused; 
-      // или currentData.isUserPaused = false; 
-
       logger.debug(`[Controller][resumeJob] Updating job ${jobId} data to remove isUserPaused flag:`, currentData);
       await (job as any).update(currentData); // Используем as any для update
       
@@ -424,18 +471,182 @@ class DataController {
           try {
               logger.info(`[Controller][resumeJob] Job ${jobId} is in delayed state, attempting to promote.`);
               await (job as any).promote(); // Используем as any для promote
-              logger.info(`[Controller][resumeJob] Job ${jobId} promoted successfully.`);
+              logger.info(`[Controller][resumeJob] Job ${jobId} promoted successfully from delayed to waiting.`);
+              
+              // Проверяем новое состояние после promote
+              const newState = await job.getState();
+              logger.info(`[Controller][resumeJob] Job ${jobId} new state after promote: ${newState}`);
           } catch (promoteError: any) {
               // Логируем ошибку, но не прерываем основной ответ, так как флаг снят
               logger.error(`[Controller][resumeJob] Failed to promote job ${jobId} after removing pause flag:`, promoteError);
           }
+      } else {
+          logger.info(`[Controller][resumeJob] Job ${jobId} is in state '${currentState}', no promotion needed.`);
       }
 
-      logger.info(`[Controller][resumeJob] Job ${jobId} resumed via data flag.`);
-      res.status(200).json({ message: 'Job resumed successfully (pause flag removed).' });
+      // Финальная проверка состояния
+      const finalState = await job.getState();
+      const finalData = await job.data;
+      
+      logger.info(`[Controller][resumeJob] Job ${jobId} resumed via data flag. Final state: ${finalState}`);
+      res.status(200).json({ 
+        message: 'Job resumed successfully (pause flag removed).', 
+        previousState: currentState,
+        finalState: finalState,
+        jobData: finalData
+      });
     } catch (error: any) {
       logger.error(`[Controller][resumeJob] Error resuming job ${jobId}:`, error);
       res.status(500).json({ message: error.message || 'Internal server error while resuming job' });
+    }
+  }
+
+  async downloadPortfolioResults(req: Request, res: Response): Promise<void> {
+    try {
+      const filename = req.params.filename;
+      const filepath = getPortfolioResultsFilePath(filename);
+      
+      logger.info(`[Downloads] Download request for file: ${filename}`);
+      logger.debug(`[Downloads] Resolved filepath: ${filepath}`);
+      
+      // Проверяем, что файл существует
+      if (!fs.existsSync(filepath)) {
+        logger.warn(`[Downloads] File not found: ${filepath}`);
+        res.status(404).json({ error: 'File not found' });
+        return;
+      }
+      
+      // Проверяем размер файла
+      const stats = fs.statSync(filepath);
+      logger.info(`[Downloads] Serving file: ${filename}, size: ${stats.size} bytes (${(stats.size / 1024 / 1024).toFixed(2)}MB)`);
+      
+      // Устанавливаем правильные заголовки для скачивания больших файлов
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Disposition');
+      res.setHeader('Content-Length', stats.size.toString());
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('Accept-Ranges', 'bytes'); // Поддержка возобновляемых загрузок
+      
+      // Обрабатываем Range запросы для поддержки возобновляемых загрузок
+      const range = req.headers.range;
+      if (range) {
+        logger.info(`[Downloads] Range request for ${filename}: ${range}`);
+        
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
+        const chunksize = (end - start) + 1;
+        
+        res.status(206); // Partial Content
+        res.setHeader('Content-Range', `bytes ${start}-${end}/${stats.size}`);
+        res.setHeader('Content-Length', chunksize.toString());
+        
+        const stream = fs.createReadStream(filepath, { start, end });
+        stream.pipe(res);
+        
+        stream.on('error', (err) => {
+          logger.error(`[Downloads] Stream error for ${filename}:`, err);
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Error streaming file' });
+          }
+        });
+        
+        stream.on('end', () => {
+          logger.info(`[Downloads] Range request completed for ${filename}: ${start}-${end}`);
+        });
+        
+      } else {
+        // Обычная загрузка полного файла через stream для больших файлов
+        const stream = fs.createReadStream(filepath);
+        
+        stream.on('error', (err) => {
+          logger.error(`[Downloads] Stream error for ${filename}:`, err);
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Error streaming file' });
+          }
+        });
+        
+        stream.on('end', () => {
+          logger.info(`[Downloads] Successfully streamed file: ${filename}`);
+        });
+        
+        stream.on('close', () => {
+          logger.debug(`[Downloads] Stream closed for: ${filename}`);
+        });
+        
+        // Устанавливаем обработчики ошибок для response
+        res.on('error', (err) => {
+          logger.error(`[Downloads] Response error for ${filename}:`, err);
+        });
+        
+        res.on('close', () => {
+          logger.debug(`[Downloads] Response closed for: ${filename}`);
+          stream.destroy(); // Закрываем stream при закрытии response
+        });
+        
+        // Pipe stream в response
+        stream.pipe(res);
+      }
+      
+    } catch (error: any) {
+      logger.error(`[Downloads] Error in download route:`, error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Internal server error' });
+      }
+    }
+  }
+
+  /**
+   * Получает исторические данные свечей.
+   */
+  async getHistoricalCandles(req: Request, res: Response): Promise<void> {
+    try {
+      const { symbol, timeframe, startTime, endTime, limit, exchange } = req.body;  // НОВОЕ: поддержка биржи
+      
+      if (!symbol || !timeframe) {
+        res.status(400).json({ 
+          success: false, 
+          message: 'Missing required parameters: symbol and timeframe are required.' 
+        });
+        return;
+      }
+
+      logger.info(`Fetching historical candles for ${symbol} (${timeframe})${exchange ? ` on ${exchange}` : ''}...`);
+
+      const params = {
+        symbol,
+        timeframe,
+        startTime: startTime ? parseInt(startTime, 10) : undefined,
+        endTime: endTime ? parseInt(endTime, 10) : undefined,
+        limit: limit ? parseInt(limit, 10) : undefined,
+        exchange  // НОВОЕ: передаем биржу в параметры
+      };
+
+      const candles = await dataService.getHistoricalCandles(params);
+      
+      res.status(200).json({ 
+        success: true, 
+        data: candles,
+        count: candles.length,
+          symbol,
+          timeframe,
+        exchange: exchange || 'any'
+      });
+
+      logger.info(`Successfully returned ${candles.length} historical candles for ${symbol} (${timeframe})${exchange ? ` on ${exchange}` : ''}.`);
+
+    } catch (error: any) {
+      logger.error(`Error fetching historical candles:`, error);
+        res.status(500).json({ 
+          success: false, 
+          message: 'Failed to fetch historical candles', 
+          error: error.message 
+        });
     }
   }
 }
