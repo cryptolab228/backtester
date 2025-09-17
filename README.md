@@ -143,7 +143,9 @@
 
 ## 🚀 Быстрый старт
 
-### 1. Клонирование и настройка:
+### Выберите режим разработки:
+
+#### 🐳 Docker (рекомендуется для продакшена)
 ```bash
 git clone <repository-url>
 cd backtesterv2
@@ -151,7 +153,24 @@ cd backtesterv2
 # Создание .env файлов из примеров
 cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env
+
+# Запуск с Docker
+docker-compose up -d
 ```
+
+#### 💻 Локальная разработка (рекомендуется для разработки)
+```bash
+git clone <repository-url>
+cd backtesterv2
+
+# Автоматическая настройка локального окружения
+./scripts/setup-local-environment.sh
+
+# Запуск в локальном режиме
+./scripts/start-local.sh
+```
+
+**📖 Подробные инструкции**: [LOCAL_DEVELOPMENT.md](LOCAL_DEVELOPMENT.md)
 
 ### 2. Настройка переменных окружения:
 
@@ -785,6 +804,39 @@ TEST
 - **Расширенное логирование** - добавлены детальные логи для портфельного бектестера  
 - **WebSocket диагностика** - улучшена отладка подключений и сообщений
 - **Отслеживание состояния задач** - улучшен мониторинг BullMQ очереди
+
+## 💻 Локальная разработка без Docker
+
+### 🎯 Новая возможность!
+Теперь проект можно запустить локально без Docker для более быстрой разработки:
+
+```bash
+# Автоматическая настройка
+./scripts/setup-local-environment.sh
+
+# Проверка готовности
+./scripts/check-local-environment.sh
+
+# Запуск
+./scripts/start-local.sh
+```
+
+### ⚡ Преимущества локальной разработки:
+- **Быстрый старт**: Нет накладных расходов контейнеризации
+- **Простая отладка**: Прямой доступ к процессам и логам
+- **IDE интеграция**: Лучшая поддержка отладчиков
+- **Hot Reloading**: Мгновенные изменения в коде
+
+### 🛠️ Инструменты разработки:
+```bash
+./scripts/dev-tools.sh check      # Проверить окружение
+./scripts/dev-tools.sh start      # Запустить сервисы
+./scripts/dev-tools.sh stop       # Остановить сервисы
+./scripts/dev-tools.sh reset      # Сбросить данные
+./scripts/dev-tools.sh help       # Показать справку
+```
+
+**📖 Полная документация**: [LOCAL_DEVELOPMENT.md](LOCAL_DEVELOPMENT.md)
 
 ## 🔄 Важные обновления
 

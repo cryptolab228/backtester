@@ -7,7 +7,11 @@
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/app.js",
     "dev": "ts-node-dev -r tsconfig-paths/register --respawn --transpile-only --ignore-watch node_modules --no-notify src/app.ts",
-    "test": "jest"
+    "dev:local": "NODE_ENV=development ts-node-dev -r tsconfig-paths/register --respawn --transpile-only --ignore-watch node_modules --no-notify src/app.ts",
+    "test": "jest",
+    "test:local": "NODE_ENV=test jest",
+    "migrate": "ts-node -r tsconfig-paths/register src/utils/migrate.ts",
+    "db:reset": "ts-node -r tsconfig-paths/register src/utils/resetDatabase.ts"
   },
   "keywords": [],
   "author": "",
