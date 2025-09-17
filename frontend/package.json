@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:local": "vite --config vite.config.local.ts",
     "build": "vue-tsc -b && vite build",
+    "build:local": "vue-tsc -b && vite build --config vite.config.local.ts",
     "preview": "vite preview"
   },
   "dependencies": {
