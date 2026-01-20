@@ -1,0 +1,44 @@
+{
+  "name": "backtester-v2",
+  "version": "2.0.0",
+  "description": "High-performance backtesting system (Simplified Startup)",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently --kill-others-on-fail --prefix-colors \"blue,green\" \"npm:dev:backend\" \"npm:dev:frontend\"",
+    "dev:windows": "start cmd /k \"cd backend && npm run dev\" && start cmd /k \"cd frontend && npm run dev\"",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build": "npm run build --prefix backend && npm run build --prefix frontend",
+    "start": "concurrently --kill-others-on-fail --prefix-colors \"blue,green\" \"npm:start:backend\" \"npm:start:frontend\"",
+    "start:backend": "cd backend && npm start",
+    "start:frontend": "cd frontend && npm run preview",
+    "clean:backend": "npm run clean --prefix backend",
+    "clean:frontend": "npm run clean --prefix frontend",
+    "install:all": "npm install && npm install --prefix backend && npm install --prefix frontend"
+  },
+  "keywords": [
+    "backtesting",
+    "trading",
+    "vue",
+    "nodejs",
+    "typescript",
+    "postgresql",
+    "redis"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.0.9",
+    "concurrently": "^9.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "dependencies": {
+    "compression": "^1.8.1",
+    "express-rate-limit": "^8.1.0",
+    "helmet": "^8.1.0"
+  }
+}

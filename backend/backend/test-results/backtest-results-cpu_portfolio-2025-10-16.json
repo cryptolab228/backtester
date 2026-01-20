@@ -1,0 +1,1290 @@
+[
+  {
+    "testId": "cpu-portfolio-1760628043185-4pairs",
+    "timestamp": "2025-10-16T15:20:43.185Z",
+    "testType": "CPU_PORTFOLIO",
+    "pairSymbols": [
+      "BTCUSDT",
+      "XRPUSDT",
+      "SOLUSDT",
+      "ETHUSDT"
+    ],
+    "timeframe": "1h",
+    "dateRange": {
+      "startDate": "2022-05-17",
+      "endDate": "2024-08-13"
+    },
+    "initialCapital": 10000,
+    "metrics": {
+      "totalPnl": 3259.0967569366403,
+      "totalPnlPercentage": 32.590967569366406,
+      "totalTrades": 997,
+      "winningTrades": 465,
+      "losingTrades": 532,
+      "winRate": 46.63991975927783,
+      "profitFactor": 1.071578004359555,
+      "maxDrawdown": 43.62966872004724,
+      "durationMs": 394
+    },
+    "portfolioMetrics": {
+      "totalPortfolioTrades": 997,
+      "portfolioWinRate": 46.63991975927783,
+      "avgConcurrentTrades": 3.9278246934934122,
+      "peakConcurrentTrades": 4
+    },
+    "strategyParameters": {
+      "dlc": {
+        "period": 40,
+        "pocLookback": 5,
+        "numProfiles": 1,
+        "pocColor": "#FF0000",
+        "vahColor": "#00FF00",
+        "valColor": "#0000FF",
+        "numBins": 100,
+        "vaPercentage": 0.7
+      },
+      "nwe": {
+        "enabled": true,
+        "bandwidth": 8,
+        "multiplier": 3,
+        "source": "close",
+        "repaint": false,
+        "upColor": "#00FFFF",
+        "downColor": "#FFFF00"
+      },
+      "clusters": {
+        "source": "volume",
+        "minVolumeThresholdMultiplier": 1.5,
+        "deltaThreshold": 0.7,
+        "lookbackPeriod": 20,
+        "confirmationBars": 1,
+        "buyColor": "#00FF00",
+        "sellColor": "#FF0000"
+      },
+      "risk": {
+        "atrPeriod": 14,
+        "positionSizePercentage": 0.02,
+        "stopLossMultiplier": 2,
+        "takeProfitMultiplier": 5,
+        "useTrailingStop": false,
+        "trailingStopOffsetMultiplier": 1.5,
+        "trailingStopStepMultiplier": 0.25,
+        "maxTradesPerDay": 2,
+        "maxRiskPerTradePercentage": 0.01,
+        "exitOnOppositeSignal": false
+      }
+    },
+    "firstTradeDetails": {
+      "timestamp": 1652814000000,
+      "direction": "long",
+      "entryPrice": 30086.035499999998,
+      "pnl": -139.14314121012114,
+      "pair": "BTCUSDT"
+    },
+    "lastTradeDetails": {
+      "timestamp": 1722819600000,
+      "direction": "long",
+      "entryPrice": 2317.728285,
+      "pnl": 345.00019282495293,
+      "pair": "ETHUSDT"
+    },
+    "candlesProcessed": 78628,
+    "executionSource": "IMMEDIATE"
+  },
+  {
+    "testId": "cpu-portfolio-1760628060759-4pairs",
+    "timestamp": "2025-10-16T15:21:00.759Z",
+    "testType": "CPU_PORTFOLIO",
+    "pairSymbols": [
+      "BTCUSDT",
+      "XRPUSDT",
+      "SOLUSDT",
+      "ETHUSDT"
+    ],
+    "timeframe": "1h",
+    "dateRange": {
+      "startDate": "2022-05-17",
+      "endDate": "2024-08-13"
+    },
+    "initialCapital": 10000,
+    "metrics": {
+      "totalPnl": -9989.896162098119,
+      "totalPnlPercentage": -99.89896162098118,
+      "totalTrades": 981,
+      "winningTrades": 460,
+      "losingTrades": 521,
+      "winRate": 46.89092762487258,
+      "profitFactor": 0.7528067307026334,
+      "maxDrawdown": 100.30659900815276,
+      "durationMs": 440
+    },
+    "portfolioMetrics": {
+      "totalPortfolioTrades": 981,
+      "portfolioWinRate": 46.89092762487258,
+      "avgConcurrentTrades": 3.9114388767229165,
+      "peakConcurrentTrades": 4
+    },
+    "strategyParameters": {
+      "dlc": {
+        "period": 40,
+        "pocLookback": 5,
+        "numProfiles": 1,
+        "pocColor": "#FF0000",
+        "vahColor": "#00FF00",
+        "valColor": "#0000FF",
+        "numBins": 100,
+        "vaPercentage": 0.7
+      },
+      "nwe": {
+        "enabled": true,
+        "bandwidth": 8,
+        "multiplier": 3,
+        "source": "close",
+        "repaint": false,
+        "upColor": "#00FFFF",
+        "downColor": "#FFFF00"
+      },
+      "clusters": {
+        "source": "volume",
+        "minVolumeThresholdMultiplier": 1.5,
+        "deltaThreshold": 0.7,
+        "lookbackPeriod": 20,
+        "confirmationBars": 1,
+        "buyColor": "#00FF00",
+        "sellColor": "#FF0000"
+      },
+      "risk": {
+        "atrPeriod": 14,
+        "positionSizePercentage": 0.02,
+        "stopLossMultiplier": 2,
+        "takeProfitMultiplier": 5,
+        "useTrailingStop": false,
+        "trailingStopOffsetMultiplier": 1.5,
+        "trailingStopStepMultiplier": 0.25,
+        "maxTradesPerDay": 2,
+        "maxRiskPerTradePercentage": 0.01,
+        "exitOnOppositeSignal": false
+      }
+    },
+    "firstTradeDetails": {
+      "timestamp": 1652817600000,
+      "direction": "long",
+      "entryPrice": 30086.035499999998,
+      "pnl": -1472.874302921895,
+      "pair": "BTCUSDT"
+    },
+    "lastTradeDetails": {
+      "timestamp": 1722819600000,
+      "direction": "short",
+      "entryPrice": 2523.83745,
+      "pnl": 3.35532415697244,
+      "pair": "ETHUSDT"
+    },
+    "candlesProcessed": 78628,
+    "executionSource": "IMMEDIATE"
+  },
+  {
+    "testId": "cpu-portfolio-1760628873380-4pairs",
+    "timestamp": "2025-10-16T15:34:33.380Z",
+    "testType": "CPU_PORTFOLIO",
+    "pairSymbols": [
+      "BTCUSDT",
+      "XRPUSDT",
+      "SOLUSDT",
+      "ETHUSDT"
+    ],
+    "timeframe": "1h",
+    "dateRange": {
+      "startDate": "2022-05-17",
+      "endDate": "2024-08-13"
+    },
+    "initialCapital": 10000,
+    "metrics": {
+      "totalPnl": 3259.0967569366403,
+      "totalPnlPercentage": 32.590967569366406,
+      "totalTrades": 997,
+      "winningTrades": 465,
+      "losingTrades": 532,
+      "winRate": 46.63991975927783,
+      "profitFactor": 1.071578004359555,
+      "maxDrawdown": 43.62966872004724,
+      "durationMs": 439
+    },
+    "portfolioMetrics": {
+      "totalPortfolioTrades": 997,
+      "portfolioWinRate": 46.63991975927783,
+      "avgConcurrentTrades": 3.9278246934934122,
+      "peakConcurrentTrades": 4
+    },
+    "strategyParameters": {
+      "dlc": {
+        "period": 40,
+        "pocLookback": 5,
+        "numProfiles": 1,
+        "pocColor": "#FF0000",
+        "vahColor": "#00FF00",
+        "valColor": "#0000FF",
+        "numBins": 100,
+        "vaPercentage": 0.7
+      },
+      "nwe": {
+        "enabled": true,
+        "bandwidth": 8,
+        "multiplier": 3,
+        "source": "close",
+        "repaint": false,
+        "upColor": "#00FFFF",
+        "downColor": "#FFFF00"
+      },
+      "clusters": {
+        "source": "volume",
+        "minVolumeThresholdMultiplier": 1.5,
+        "deltaThreshold": 0.7,
+        "lookbackPeriod": 20,
+        "confirmationBars": 1,
+        "buyColor": "#00FF00",
+        "sellColor": "#FF0000"
+      },
+      "risk": {
+        "atrPeriod": 14,
+        "positionSizePercentage": 0.02,
+        "stopLossMultiplier": 2,
+        "takeProfitMultiplier": 5,
+        "useTrailingStop": false,
+        "trailingStopOffsetMultiplier": 1.5,
+        "trailingStopStepMultiplier": 0.25,
+        "maxTradesPerDay": 2,
+        "maxRiskPerTradePercentage": 0.01,
+        "exitOnOppositeSignal": false
+      }
+    },
+    "firstTradeDetails": {
+      "timestamp": 1652814000000,
+      "direction": "long",
+      "entryPrice": 30086.035499999998,
+      "pnl": -139.14314121012114,
+      "pair": "BTCUSDT"
+    },
+    "lastTradeDetails": {
+      "timestamp": 1722819600000,
+      "direction": "long",
+      "entryPrice": 2317.728285,
+      "pnl": 345.00019282495293,
+      "pair": "ETHUSDT"
+    },
+    "candlesProcessed": 78628,
+    "executionSource": "IMMEDIATE"
+  },
+  {
+    "testId": "cpu-portfolio-1760628902578-4pairs",
+    "timestamp": "2025-10-16T15:35:02.578Z",
+    "testType": "CPU_PORTFOLIO",
+    "pairSymbols": [
+      "BTCUSDT",
+      "XRPUSDT",
+      "SOLUSDT",
+      "ETHUSDT"
+    ],
+    "timeframe": "1h",
+    "dateRange": {
+      "startDate": "2022-05-17",
+      "endDate": "2024-08-13"
+    },
+    "initialCapital": 10000,
+    "metrics": {
+      "totalPnl": -9989.896162098119,
+      "totalPnlPercentage": -99.89896162098118,
+      "totalTrades": 981,
+      "winningTrades": 460,
+      "losingTrades": 521,
+      "winRate": 46.89092762487258,
+      "profitFactor": 0.7528067307026334,
+      "maxDrawdown": 100.30659900815276,
+      "durationMs": 463
+    },
+    "portfolioMetrics": {
+      "totalPortfolioTrades": 981,
+      "portfolioWinRate": 46.89092762487258,
+      "avgConcurrentTrades": 3.9114388767229165,
+      "peakConcurrentTrades": 4
+    },
+    "strategyParameters": {
+      "dlc": {
+        "period": 40,
+        "pocLookback": 5,
+        "numProfiles": 1,
+        "pocColor": "#FF0000",
+        "vahColor": "#00FF00",
+        "valColor": "#0000FF",
+        "numBins": 100,
+        "vaPercentage": 0.7
+      },
+      "nwe": {
+        "enabled": true,
+        "bandwidth": 8,
+        "multiplier": 3,
+        "source": "close",
+        "repaint": false,
+        "upColor": "#00FFFF",
+        "downColor": "#FFFF00"
+      },
+      "clusters": {
+        "source": "volume",
+        "minVolumeThresholdMultiplier": 1.5,
+        "deltaThreshold": 0.7,
+        "lookbackPeriod": 20,
+        "confirmationBars": 1,
+        "buyColor": "#00FF00",
+        "sellColor": "#FF0000"
+      },
+      "risk": {
+        "atrPeriod": 14,
+        "positionSizePercentage": 0.02,
+        "stopLossMultiplier": 2,
+        "takeProfitMultiplier": 5,
+        "useTrailingStop": false,
+        "trailingStopOffsetMultiplier": 1.5,
+        "trailingStopStepMultiplier": 0.25,
+        "maxTradesPerDay": 2,
+        "maxRiskPerTradePercentage": 0.01,
+        "exitOnOppositeSignal": false
+      }
+    },
+    "firstTradeDetails": {
+      "timestamp": 1652817600000,
+      "direction": "long",
+      "entryPrice": 30086.035499999998,
+      "pnl": -1472.874302921895,
+      "pair": "BTCUSDT"
+    },
+    "lastTradeDetails": {
+      "timestamp": 1722819600000,
+      "direction": "short",
+      "entryPrice": 2523.83745,
+      "pnl": 3.35532415697244,
+      "pair": "ETHUSDT"
+    },
+    "candlesProcessed": 78628,
+    "executionSource": "IMMEDIATE"
+  },
+  {
+    "testId": "cpu-portfolio-1760629122041-4pairs",
+    "timestamp": "2025-10-16T15:38:42.041Z",
+    "testType": "CPU_PORTFOLIO",
+    "pairSymbols": [
+      "BTCUSDT",
+      "XRPUSDT",
+      "SOLUSDT",
+      "ETHUSDT"
+    ],
+    "timeframe": "1h",
+    "dateRange": {
+      "startDate": "2022-05-17",
+      "endDate": "2024-08-13"
+    },
+    "initialCapital": 10000,
+    "metrics": {
+      "totalPnl": 3259.0967569366403,
+      "totalPnlPercentage": 32.590967569366406,
+      "totalTrades": 997,
+      "winningTrades": 465,
+      "losingTrades": 532,
+      "winRate": 46.63991975927783,
+      "profitFactor": 1.071578004359555,
+      "maxDrawdown": 43.62966872004724,
+      "durationMs": 478
+    },
+    "portfolioMetrics": {
+      "totalPortfolioTrades": 997,
+      "portfolioWinRate": 46.63991975927783,
+      "avgConcurrentTrades": 3.9278246934934122,
+      "peakConcurrentTrades": 4
+    },
+    "strategyParameters": {
+      "dlc": {
+        "period": 40,
+        "pocLookback": 5,
+        "numProfiles": 1,
+        "pocColor": "#FF0000",
+        "vahColor": "#00FF00",
+        "valColor": "#0000FF",
+        "numBins": 100,
+        "vaPercentage": 0.7
+      },
+      "nwe": {
+        "enabled": true,
+        "bandwidth": 8,
+        "multiplier": 3,
+        "source": "close",
+        "repaint": false,
+        "upColor": "#00FFFF",
+        "downColor": "#FFFF00"
+      },
+      "clusters": {
+        "source": "volume",
+        "minVolumeThresholdMultiplier": 1.5,
+        "deltaThreshold": 0.7,
+        "lookbackPeriod": 20,
+        "confirmationBars": 1,
+        "buyColor": "#00FF00",
+        "sellColor": "#FF0000"
+      },
+      "risk": {
+        "atrPeriod": 14,
+        "positionSizePercentage": 0.02,
+        "stopLossMultiplier": 2,
+        "takeProfitMultiplier": 5,
+        "useTrailingStop": false,
+        "trailingStopOffsetMultiplier": 1.5,
+        "trailingStopStepMultiplier": 0.25,
+        "maxTradesPerDay": 2,
+        "maxRiskPerTradePercentage": 0.01,
+        "exitOnOppositeSignal": false
+      }
+    },
+    "firstTradeDetails": {
+      "timestamp": 1652814000000,
+      "direction": "long",
+      "entryPrice": 30086.035499999998,
+      "pnl": -139.14314121012114,
+      "pair": "BTCUSDT"
+    },
+    "lastTradeDetails": {
+      "timestamp": 1722819600000,
+      "direction": "long",
+      "entryPrice": 2317.728285,
+      "pnl": 345.00019282495293,
+      "pair": "ETHUSDT"
+    },
+    "candlesProcessed": 78628,
+    "executionSource": "IMMEDIATE"
+  },
+  {
+    "testId": "cpu-portfolio-1760629139010-4pairs",
+    "timestamp": "2025-10-16T15:38:59.010Z",
+    "testType": "CPU_PORTFOLIO",
+    "pairSymbols": [
+      "BTCUSDT",
+      "XRPUSDT",
+      "SOLUSDT",
+      "ETHUSDT"
+    ],
+    "timeframe": "1h",
+    "dateRange": {
+      "startDate": "2022-05-17",
+      "endDate": "2024-08-13"
+    },
+    "initialCapital": 10000,
+    "metrics": {
+      "totalPnl": -9989.896162098119,
+      "totalPnlPercentage": -99.89896162098118,
+      "totalTrades": 981,
+      "winningTrades": 460,
+      "losingTrades": 521,
+      "winRate": 46.89092762487258,
+      "profitFactor": 0.7528067307026334,
+      "maxDrawdown": 100.30659900815276,
+      "durationMs": 422
+    },
+    "portfolioMetrics": {
+      "totalPortfolioTrades": 981,
+      "portfolioWinRate": 46.89092762487258,
+      "avgConcurrentTrades": 3.9114388767229165,
+      "peakConcurrentTrades": 4
+    },
+    "strategyParameters": {
+      "dlc": {
+        "period": 40,
+        "pocLookback": 5,
+        "numProfiles": 1,
+        "pocColor": "#FF0000",
+        "vahColor": "#00FF00",
+        "valColor": "#0000FF",
+        "numBins": 100,
+        "vaPercentage": 0.7
+      },
+      "nwe": {
+        "enabled": true,
+        "bandwidth": 8,
+        "multiplier": 3,
+        "source": "close",
+        "repaint": false,
+        "upColor": "#00FFFF",
+        "downColor": "#FFFF00"
+      },
+      "clusters": {
+        "source": "volume",
+        "minVolumeThresholdMultiplier": 1.5,
+        "deltaThreshold": 0.7,
+        "lookbackPeriod": 20,
+        "confirmationBars": 1,
+        "buyColor": "#00FF00",
+        "sellColor": "#FF0000"
+      },
+      "risk": {
+        "atrPeriod": 14,
+        "positionSizePercentage": 0.02,
+        "stopLossMultiplier": 2,
+        "takeProfitMultiplier": 5,
+        "useTrailingStop": false,
+        "trailingStopOffsetMultiplier": 1.5,
+        "trailingStopStepMultiplier": 0.25,
+        "maxTradesPerDay": 2,
+        "maxRiskPerTradePercentage": 0.01,
+        "exitOnOppositeSignal": false
+      }
+    },
+    "firstTradeDetails": {
+      "timestamp": 1652817600000,
+      "direction": "long",
+      "entryPrice": 30086.035499999998,
+      "pnl": -1472.874302921895,
+      "pair": "BTCUSDT"
+    },
+    "lastTradeDetails": {
+      "timestamp": 1722819600000,
+      "direction": "short",
+      "entryPrice": 2523.83745,
+      "pnl": 3.35532415697244,
+      "pair": "ETHUSDT"
+    },
+    "candlesProcessed": 78628,
+    "executionSource": "IMMEDIATE"
+  },
+  {
+    "testId": "cpu-portfolio-1760630204370-4pairs",
+    "timestamp": "2025-10-16T15:56:44.370Z",
+    "testType": "CPU_PORTFOLIO",
+    "pairSymbols": [
+      "BTCUSDT",
+      "XRPUSDT",
+      "SOLUSDT",
+      "ETHUSDT"
+    ],
+    "timeframe": "1h",
+    "dateRange": {
+      "startDate": "2022-05-17",
+      "endDate": "2024-08-13"
+    },
+    "initialCapital": 10000,
+    "metrics": {
+      "totalPnl": -3528.412301942022,
+      "totalPnlPercentage": -35.28412301942022,
+      "totalTrades": 978,
+      "winningTrades": 452,
+      "losingTrades": 526,
+      "winRate": 46.216768916155424,
+      "profitFactor": 1.1161101333599865,
+      "maxDrawdown": 94.52328727759141,
+      "durationMs": 536
+    },
+    "portfolioMetrics": {
+      "totalPortfolioTrades": 978,
+      "portfolioWinRate": 46.216768916155424,
+      "avgConcurrentTrades": 3.90720862796968,
+      "peakConcurrentTrades": 4
+    },
+    "strategyParameters": {
+      "dlc": {
+        "period": 40,
+        "pocLookback": 5,
+        "numProfiles": 1,
+        "pocColor": "#FF0000",
+        "vahColor": "#00FF00",
+        "valColor": "#0000FF",
+        "numBins": 100,
+        "vaPercentage": 0.7
+      },
+      "nwe": {
+        "enabled": true,
+        "bandwidth": 8,
+        "multiplier": 3,
+        "source": "close",
+        "repaint": false,
+        "upColor": "#00FFFF",
+        "downColor": "#FFFF00"
+      },
+      "clusters": {
+        "source": "volume",
+        "minVolumeThresholdMultiplier": 1.5,
+        "deltaThreshold": 0.7,
+        "lookbackPeriod": 20,
+        "confirmationBars": 1,
+        "buyColor": "#00FF00",
+        "sellColor": "#FF0000"
+      },
+      "risk": {
+        "atrPeriod": 14,
+        "positionSizePercentage": 0.02,
+        "stopLossMultiplier": 2,
+        "takeProfitMultiplier": 5,
+        "useTrailingStop": false,
+        "trailingStopOffsetMultiplier": 1.5,
+        "trailingStopStepMultiplier": 0.25,
+        "maxTradesPerDay": 2,
+        "maxRiskPerTradePercentage": 0.01,
+        "exitOnOppositeSignal": false
+      }
+    },
+    "firstTradeDetails": {
+      "timestamp": 1652814000000,
+      "direction": "long",
+      "entryPrice": 30071,
+      "pnl": -112.53420375664122,
+      "pair": "BTCUSDT"
+    },
+    "lastTradeDetails": {
+      "timestamp": 1722819600000,
+      "direction": "long",
+      "entryPrice": 2316.57,
+      "pnl": 324.95977277805997,
+      "pair": "ETHUSDT"
+    },
+    "candlesProcessed": 78628,
+    "executionSource": "IMMEDIATE"
+  },
+  {
+    "testId": "cpu-portfolio-1760630222751-4pairs",
+    "timestamp": "2025-10-16T15:57:02.751Z",
+    "testType": "CPU_PORTFOLIO",
+    "pairSymbols": [
+      "BTCUSDT",
+      "XRPUSDT",
+      "SOLUSDT",
+      "ETHUSDT"
+    ],
+    "timeframe": "1h",
+    "dateRange": {
+      "startDate": "2022-05-17",
+      "endDate": "2024-08-13"
+    },
+    "initialCapital": 10000,
+    "metrics": {
+      "totalPnl": 4764.2010524623165,
+      "totalPnlPercentage": 47.64201052462316,
+      "totalTrades": 989,
+      "winningTrades": 465,
+      "losingTrades": 524,
+      "winRate": 47.01718907987866,
+      "profitFactor": 1.085597468277476,
+      "maxDrawdown": 42.04297503603199,
+      "durationMs": 460
+    },
+    "portfolioMetrics": {
+      "totalPortfolioTrades": 989,
+      "portfolioWinRate": 47.01718907987866,
+      "avgConcurrentTrades": 3.9109035872995426,
+      "peakConcurrentTrades": 4
+    },
+    "strategyParameters": {
+      "dlc": {
+        "period": 40,
+        "pocLookback": 5,
+        "numProfiles": 1,
+        "pocColor": "#FF0000",
+        "vahColor": "#00FF00",
+        "valColor": "#0000FF",
+        "numBins": 100,
+        "vaPercentage": 0.7
+      },
+      "nwe": {
+        "enabled": true,
+        "bandwidth": 8,
+        "multiplier": 3,
+        "source": "close",
+        "repaint": false,
+        "upColor": "#00FFFF",
+        "downColor": "#FFFF00"
+      },
+      "clusters": {
+        "source": "volume",
+        "minVolumeThresholdMultiplier": 1.5,
+        "deltaThreshold": 0.7,
+        "lookbackPeriod": 20,
+        "confirmationBars": 1,
+        "buyColor": "#00FF00",
+        "sellColor": "#FF0000"
+      },
+      "risk": {
+        "atrPeriod": 14,
+        "positionSizePercentage": 0.02,
+        "stopLossMultiplier": 2,
+        "takeProfitMultiplier": 5,
+        "useTrailingStop": false,
+        "trailingStopOffsetMultiplier": 1.5,
+        "trailingStopStepMultiplier": 0.25,
+        "maxTradesPerDay": 2,
+        "maxRiskPerTradePercentage": 0.01,
+        "exitOnOppositeSignal": false
+      }
+    },
+    "firstTradeDetails": {
+      "timestamp": 1652817600000,
+      "direction": "long",
+      "entryPrice": 30086.035499999998,
+      "pnl": -147.2874302921895,
+      "pair": "BTCUSDT"
+    },
+    "lastTradeDetails": {
+      "timestamp": 1722819600000,
+      "direction": "short",
+      "entryPrice": 2523.83745,
+      "pnl": 253.98903556958024,
+      "pair": "ETHUSDT"
+    },
+    "candlesProcessed": 78628,
+    "executionSource": "IMMEDIATE"
+  },
+  {
+    "testId": "cpu-portfolio-1760631275488-4pairs",
+    "timestamp": "2025-10-16T16:14:35.488Z",
+    "testType": "CPU_PORTFOLIO",
+    "pairSymbols": [
+      "BTCUSDT",
+      "XRPUSDT",
+      "SOLUSDT",
+      "ETHUSDT"
+    ],
+    "timeframe": "1h",
+    "dateRange": {
+      "startDate": "2022-05-17",
+      "endDate": "2024-08-13"
+    },
+    "initialCapital": 10000,
+    "metrics": {
+      "totalPnl": 4764.2010524623165,
+      "totalPnlPercentage": 47.64201052462316,
+      "totalTrades": 989,
+      "winningTrades": 465,
+      "losingTrades": 524,
+      "winRate": 47.01718907987866,
+      "profitFactor": 1.085597468277476,
+      "maxDrawdown": 42.04297503603199,
+      "durationMs": 389
+    },
+    "portfolioMetrics": {
+      "totalPortfolioTrades": 989,
+      "portfolioWinRate": 47.01718907987866,
+      "avgConcurrentTrades": 3.9109035872995426,
+      "peakConcurrentTrades": 4
+    },
+    "strategyParameters": {
+      "dlc": {
+        "period": 40,
+        "pocLookback": 5,
+        "numProfiles": 1,
+        "pocColor": "#FF0000",
+        "vahColor": "#00FF00",
+        "valColor": "#0000FF",
+        "numBins": 100,
+        "vaPercentage": 0.7
+      },
+      "nwe": {
+        "enabled": true,
+        "bandwidth": 8,
+        "multiplier": 3,
+        "source": "close",
+        "repaint": false,
+        "upColor": "#00FFFF",
+        "downColor": "#FFFF00"
+      },
+      "clusters": {
+        "source": "volume",
+        "minVolumeThresholdMultiplier": 1.5,
+        "deltaThreshold": 0.7,
+        "lookbackPeriod": 20,
+        "confirmationBars": 1,
+        "buyColor": "#00FF00",
+        "sellColor": "#FF0000"
+      },
+      "risk": {
+        "atrPeriod": 14,
+        "positionSizePercentage": 0.02,
+        "stopLossMultiplier": 2,
+        "takeProfitMultiplier": 5,
+        "useTrailingStop": false,
+        "trailingStopOffsetMultiplier": 1.5,
+        "trailingStopStepMultiplier": 0.25,
+        "maxTradesPerDay": 2,
+        "maxRiskPerTradePercentage": 0.01,
+        "exitOnOppositeSignal": false
+      }
+    },
+    "firstTradeDetails": {
+      "timestamp": 1652817600000,
+      "direction": "long",
+      "entryPrice": 30086.035499999998,
+      "pnl": -147.2874302921895,
+      "pair": "BTCUSDT"
+    },
+    "lastTradeDetails": {
+      "timestamp": 1722819600000,
+      "direction": "short",
+      "entryPrice": 2523.83745,
+      "pnl": 253.98903556958024,
+      "pair": "ETHUSDT"
+    },
+    "candlesProcessed": 78628,
+    "executionSource": "IMMEDIATE"
+  },
+  {
+    "testId": "cpu-portfolio-1760631295664-4pairs",
+    "timestamp": "2025-10-16T16:14:55.664Z",
+    "testType": "CPU_PORTFOLIO",
+    "pairSymbols": [
+      "BTCUSDT",
+      "XRPUSDT",
+      "SOLUSDT",
+      "ETHUSDT"
+    ],
+    "timeframe": "1h",
+    "dateRange": {
+      "startDate": "2022-05-17",
+      "endDate": "2024-08-13"
+    },
+    "initialCapital": 10000,
+    "metrics": {
+      "totalPnl": -3528.412301942022,
+      "totalPnlPercentage": -35.28412301942022,
+      "totalTrades": 978,
+      "winningTrades": 452,
+      "losingTrades": 526,
+      "winRate": 46.216768916155424,
+      "profitFactor": 1.1161101333599865,
+      "maxDrawdown": 94.52328727759141,
+      "durationMs": 414
+    },
+    "portfolioMetrics": {
+      "totalPortfolioTrades": 978,
+      "portfolioWinRate": 46.216768916155424,
+      "avgConcurrentTrades": 3.90720862796968,
+      "peakConcurrentTrades": 4
+    },
+    "strategyParameters": {
+      "dlc": {
+        "period": 40,
+        "pocLookback": 5,
+        "numProfiles": 1,
+        "pocColor": "#FF0000",
+        "vahColor": "#00FF00",
+        "valColor": "#0000FF",
+        "numBins": 100,
+        "vaPercentage": 0.7
+      },
+      "nwe": {
+        "enabled": true,
+        "bandwidth": 8,
+        "multiplier": 3,
+        "source": "close",
+        "repaint": false,
+        "upColor": "#00FFFF",
+        "downColor": "#FFFF00"
+      },
+      "clusters": {
+        "source": "volume",
+        "minVolumeThresholdMultiplier": 1.5,
+        "deltaThreshold": 0.7,
+        "lookbackPeriod": 20,
+        "confirmationBars": 1,
+        "buyColor": "#00FF00",
+        "sellColor": "#FF0000"
+      },
+      "risk": {
+        "atrPeriod": 14,
+        "positionSizePercentage": 0.02,
+        "stopLossMultiplier": 2,
+        "takeProfitMultiplier": 5,
+        "useTrailingStop": false,
+        "trailingStopOffsetMultiplier": 1.5,
+        "trailingStopStepMultiplier": 0.25,
+        "maxTradesPerDay": 2,
+        "maxRiskPerTradePercentage": 0.01,
+        "exitOnOppositeSignal": false
+      }
+    },
+    "firstTradeDetails": {
+      "timestamp": 1652814000000,
+      "direction": "long",
+      "entryPrice": 30071,
+      "pnl": -112.53420375664122,
+      "pair": "BTCUSDT"
+    },
+    "lastTradeDetails": {
+      "timestamp": 1722819600000,
+      "direction": "long",
+      "entryPrice": 2316.57,
+      "pnl": 324.95977277805997,
+      "pair": "ETHUSDT"
+    },
+    "candlesProcessed": 78628,
+    "executionSource": "IMMEDIATE"
+  },
+  {
+    "testId": "cpu-portfolio-1760638026712-4pairs",
+    "timestamp": "2025-10-16T18:07:06.712Z",
+    "testType": "CPU_PORTFOLIO",
+    "pairSymbols": [
+      "BTCUSDT",
+      "XRPUSDT",
+      "SOLUSDT",
+      "ETHUSDT"
+    ],
+    "timeframe": "1h",
+    "dateRange": {
+      "startDate": "2022-05-17",
+      "endDate": "2024-08-13"
+    },
+    "initialCapital": 10000,
+    "metrics": {
+      "totalPnl": -3528.412301942022,
+      "totalPnlPercentage": -35.28412301942022,
+      "totalTrades": 978,
+      "winningTrades": 452,
+      "losingTrades": 526,
+      "winRate": 46.216768916155424,
+      "profitFactor": 1.1161101333599865,
+      "maxDrawdown": 94.52328727759141,
+      "durationMs": 379
+    },
+    "portfolioMetrics": {
+      "totalPortfolioTrades": 978,
+      "portfolioWinRate": 46.216768916155424,
+      "avgConcurrentTrades": 3.90720862796968,
+      "peakConcurrentTrades": 4
+    },
+    "strategyParameters": {
+      "dlc": {
+        "period": 40,
+        "pocLookback": 5,
+        "numProfiles": 1,
+        "pocColor": "#FF0000",
+        "vahColor": "#00FF00",
+        "valColor": "#0000FF",
+        "numBins": 100,
+        "vaPercentage": 0.7
+      },
+      "nwe": {
+        "enabled": true,
+        "bandwidth": 8,
+        "multiplier": 3,
+        "source": "close",
+        "repaint": false,
+        "upColor": "#00FFFF",
+        "downColor": "#FFFF00"
+      },
+      "clusters": {
+        "source": "volume",
+        "minVolumeThresholdMultiplier": 1.5,
+        "deltaThreshold": 0.7,
+        "lookbackPeriod": 20,
+        "confirmationBars": 1,
+        "buyColor": "#00FF00",
+        "sellColor": "#FF0000"
+      },
+      "risk": {
+        "atrPeriod": 14,
+        "positionSizePercentage": 0.02,
+        "stopLossMultiplier": 2,
+        "takeProfitMultiplier": 5,
+        "useTrailingStop": false,
+        "trailingStopOffsetMultiplier": 1.5,
+        "trailingStopStepMultiplier": 0.25,
+        "maxTradesPerDay": 2,
+        "maxRiskPerTradePercentage": 0.01,
+        "exitOnOppositeSignal": false
+      }
+    },
+    "firstTradeDetails": {
+      "timestamp": 1652814000000,
+      "direction": "long",
+      "entryPrice": 30071,
+      "pnl": -112.53420375664122,
+      "pair": "BTCUSDT"
+    },
+    "lastTradeDetails": {
+      "timestamp": 1722819600000,
+      "direction": "long",
+      "entryPrice": 2316.57,
+      "pnl": 324.95977277805997,
+      "pair": "ETHUSDT"
+    },
+    "candlesProcessed": 78628,
+    "executionSource": "IMMEDIATE"
+  },
+  {
+    "testId": "cpu-portfolio-1760638037004-4pairs",
+    "timestamp": "2025-10-16T18:07:17.004Z",
+    "testType": "CPU_PORTFOLIO",
+    "pairSymbols": [
+      "BTCUSDT",
+      "XRPUSDT",
+      "SOLUSDT",
+      "ETHUSDT"
+    ],
+    "timeframe": "1h",
+    "dateRange": {
+      "startDate": "2022-05-17",
+      "endDate": "2024-08-13"
+    },
+    "initialCapital": 10000,
+    "metrics": {
+      "totalPnl": 4764.2010524623165,
+      "totalPnlPercentage": 47.64201052462316,
+      "totalTrades": 989,
+      "winningTrades": 465,
+      "losingTrades": 524,
+      "winRate": 47.01718907987866,
+      "profitFactor": 1.085597468277476,
+      "maxDrawdown": 42.04297503603199,
+      "durationMs": 475
+    },
+    "portfolioMetrics": {
+      "totalPortfolioTrades": 989,
+      "portfolioWinRate": 47.01718907987866,
+      "avgConcurrentTrades": 3.9109035872995426,
+      "peakConcurrentTrades": 4
+    },
+    "strategyParameters": {
+      "dlc": {
+        "period": 40,
+        "pocLookback": 5,
+        "numProfiles": 1,
+        "pocColor": "#FF0000",
+        "vahColor": "#00FF00",
+        "valColor": "#0000FF",
+        "numBins": 100,
+        "vaPercentage": 0.7
+      },
+      "nwe": {
+        "enabled": true,
+        "bandwidth": 8,
+        "multiplier": 3,
+        "source": "close",
+        "repaint": false,
+        "upColor": "#00FFFF",
+        "downColor": "#FFFF00"
+      },
+      "clusters": {
+        "source": "volume",
+        "minVolumeThresholdMultiplier": 1.5,
+        "deltaThreshold": 0.7,
+        "lookbackPeriod": 20,
+        "confirmationBars": 1,
+        "buyColor": "#00FF00",
+        "sellColor": "#FF0000"
+      },
+      "risk": {
+        "atrPeriod": 14,
+        "positionSizePercentage": 0.02,
+        "stopLossMultiplier": 2,
+        "takeProfitMultiplier": 5,
+        "useTrailingStop": false,
+        "trailingStopOffsetMultiplier": 1.5,
+        "trailingStopStepMultiplier": 0.25,
+        "maxTradesPerDay": 2,
+        "maxRiskPerTradePercentage": 0.01,
+        "exitOnOppositeSignal": false
+      }
+    },
+    "firstTradeDetails": {
+      "timestamp": 1652817600000,
+      "direction": "long",
+      "entryPrice": 30086.035499999998,
+      "pnl": -147.2874302921895,
+      "pair": "BTCUSDT"
+    },
+    "lastTradeDetails": {
+      "timestamp": 1722819600000,
+      "direction": "short",
+      "entryPrice": 2523.83745,
+      "pnl": 253.98903556958024,
+      "pair": "ETHUSDT"
+    },
+    "candlesProcessed": 78628,
+    "executionSource": "IMMEDIATE"
+  },
+  {
+    "testId": "cpu-portfolio-1760638060058-4pairs",
+    "timestamp": "2025-10-16T18:07:40.058Z",
+    "testType": "CPU_PORTFOLIO",
+    "pairSymbols": [
+      "BTCUSDT",
+      "XRPUSDT",
+      "SOLUSDT",
+      "ETHUSDT"
+    ],
+    "timeframe": "1h",
+    "dateRange": {
+      "startDate": "2022-05-17",
+      "endDate": "2024-08-13"
+    },
+    "initialCapital": 10000,
+    "metrics": {
+      "totalPnl": 4764.2010524623165,
+      "totalPnlPercentage": 47.64201052462316,
+      "totalTrades": 989,
+      "winningTrades": 465,
+      "losingTrades": 524,
+      "winRate": 47.01718907987866,
+      "profitFactor": 1.085597468277476,
+      "maxDrawdown": 42.04297503603199,
+      "durationMs": 470
+    },
+    "portfolioMetrics": {
+      "totalPortfolioTrades": 989,
+      "portfolioWinRate": 47.01718907987866,
+      "avgConcurrentTrades": 3.9109035872995426,
+      "peakConcurrentTrades": 4
+    },
+    "strategyParameters": {
+      "dlc": {
+        "period": 40,
+        "pocLookback": 5,
+        "numProfiles": 1,
+        "pocColor": "#FF0000",
+        "vahColor": "#00FF00",
+        "valColor": "#0000FF",
+        "numBins": 100,
+        "vaPercentage": 0.7
+      },
+      "nwe": {
+        "enabled": true,
+        "bandwidth": 8,
+        "multiplier": 3,
+        "source": "close",
+        "repaint": false,
+        "upColor": "#00FFFF",
+        "downColor": "#FFFF00"
+      },
+      "clusters": {
+        "source": "volume",
+        "minVolumeThresholdMultiplier": 1.5,
+        "deltaThreshold": 0.7,
+        "lookbackPeriod": 20,
+        "confirmationBars": 1,
+        "buyColor": "#00FF00",
+        "sellColor": "#FF0000"
+      },
+      "risk": {
+        "atrPeriod": 14,
+        "positionSizePercentage": 0.02,
+        "stopLossMultiplier": 2,
+        "takeProfitMultiplier": 5,
+        "useTrailingStop": false,
+        "trailingStopOffsetMultiplier": 1.5,
+        "trailingStopStepMultiplier": 0.25,
+        "maxTradesPerDay": 2,
+        "maxRiskPerTradePercentage": 0.01,
+        "exitOnOppositeSignal": false
+      }
+    },
+    "firstTradeDetails": {
+      "timestamp": 1652817600000,
+      "direction": "long",
+      "entryPrice": 30086.035499999998,
+      "pnl": -147.2874302921895,
+      "pair": "BTCUSDT"
+    },
+    "lastTradeDetails": {
+      "timestamp": 1722819600000,
+      "direction": "short",
+      "entryPrice": 2523.83745,
+      "pnl": 253.98903556958024,
+      "pair": "ETHUSDT"
+    },
+    "candlesProcessed": 78628,
+    "executionSource": "IMMEDIATE"
+  },
+  {
+    "testId": "cpu-portfolio-1760638069231-4pairs",
+    "timestamp": "2025-10-16T18:07:49.231Z",
+    "testType": "CPU_PORTFOLIO",
+    "pairSymbols": [
+      "BTCUSDT",
+      "XRPUSDT",
+      "SOLUSDT",
+      "ETHUSDT"
+    ],
+    "timeframe": "1h",
+    "dateRange": {
+      "startDate": "2022-05-17",
+      "endDate": "2024-08-13"
+    },
+    "initialCapital": 10000,
+    "metrics": {
+      "totalPnl": -3528.412301942022,
+      "totalPnlPercentage": -35.28412301942022,
+      "totalTrades": 978,
+      "winningTrades": 452,
+      "losingTrades": 526,
+      "winRate": 46.216768916155424,
+      "profitFactor": 1.1161101333599865,
+      "maxDrawdown": 94.52328727759141,
+      "durationMs": 398
+    },
+    "portfolioMetrics": {
+      "totalPortfolioTrades": 978,
+      "portfolioWinRate": 46.216768916155424,
+      "avgConcurrentTrades": 3.90720862796968,
+      "peakConcurrentTrades": 4
+    },
+    "strategyParameters": {
+      "dlc": {
+        "period": 40,
+        "pocLookback": 5,
+        "numProfiles": 1,
+        "pocColor": "#FF0000",
+        "vahColor": "#00FF00",
+        "valColor": "#0000FF",
+        "numBins": 100,
+        "vaPercentage": 0.7
+      },
+      "nwe": {
+        "enabled": true,
+        "bandwidth": 8,
+        "multiplier": 3,
+        "source": "close",
+        "repaint": false,
+        "upColor": "#00FFFF",
+        "downColor": "#FFFF00"
+      },
+      "clusters": {
+        "source": "volume",
+        "minVolumeThresholdMultiplier": 1.5,
+        "deltaThreshold": 0.7,
+        "lookbackPeriod": 20,
+        "confirmationBars": 1,
+        "buyColor": "#00FF00",
+        "sellColor": "#FF0000"
+      },
+      "risk": {
+        "atrPeriod": 14,
+        "positionSizePercentage": 0.02,
+        "stopLossMultiplier": 2,
+        "takeProfitMultiplier": 5,
+        "useTrailingStop": false,
+        "trailingStopOffsetMultiplier": 1.5,
+        "trailingStopStepMultiplier": 0.25,
+        "maxTradesPerDay": 2,
+        "maxRiskPerTradePercentage": 0.01,
+        "exitOnOppositeSignal": false
+      }
+    },
+    "firstTradeDetails": {
+      "timestamp": 1652814000000,
+      "direction": "long",
+      "entryPrice": 30071,
+      "pnl": -112.53420375664122,
+      "pair": "BTCUSDT"
+    },
+    "lastTradeDetails": {
+      "timestamp": 1722819600000,
+      "direction": "long",
+      "entryPrice": 2316.57,
+      "pnl": 324.95977277805997,
+      "pair": "ETHUSDT"
+    },
+    "candlesProcessed": 78628,
+    "executionSource": "IMMEDIATE"
+  }
+]

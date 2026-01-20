@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "json-stable-stringify": "^1.3.0",
+    "json2csv": "^6.0.0-alpha.2"
+  }
+}

@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  gpu-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gpu-service
+    restart: unless-stopped
+    ports:
+      - "6000:6000"   # API port
+      - "9090:9090"   # Metrics port
+    environment:
+      - NODE_ENV=production
+      - PORT=6000
+      - METRICS_PORT=9090
+      - METRICS_ENABLED=true
+      - LOG_LEVEL=info
+      - BACKEND_URL=http://backend:5000
+      - HEALTH_CHECK_INTERVAL=30000
+      - GRACEFUL_SHUTDOWN_TIMEOUT=10000
+      - CIRCUIT_BREAKER_THRESHOLD=5
+      - CIRCUIT_BREAKER_TIMEOUT=60000
+      - RATE_LIMIT_WINDOW=900000
+      - RATE_LIMIT_MAX_REQUESTS=100
+      - GPU_MAX_CONCURRENT_TASKS=4
+      - GPU_TASK_TIMEOUT=120000
+      - GPU_MEMORY_LIMIT=4096
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - backtester-network
+    depends_on:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:6000/health"]
+      interval: 30s
+      retries: 3
+      start_period: 40s
+      timeout: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+networks:
+  backtester-network:
+    external: true
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

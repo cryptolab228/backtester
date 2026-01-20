@@ -1,0 +1,370 @@
+[
+  {
+    "testId": "cpu-portfolio-1759019397473-4pairs",
+    "timestamp": "2025-09-28T00:29:57.473Z",
+    "testType": "CPU_PORTFOLIO",
+    "pairSymbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "XRPUSDT",
+      "SOLUSDT"
+    ],
+    "timeframe": "1h",
+    "dateRange": {
+      "startDate": "2024-07-07",
+      "endDate": "2025-05-18"
+    },
+    "initialCapital": 1000,
+    "metrics": {
+      "totalPnl": 2766.6273974902942,
+      "totalPnlPercentage": 276.6627397490294,
+      "totalTrades": 428,
+      "winningTrades": 198,
+      "losingTrades": 230,
+      "winRate": 46.26168224299065,
+      "profitFactor": 1.1256637261480724,
+      "maxDrawdown": 40.1796240836535,
+      "durationMs": 163
+    },
+    "portfolioMetrics": {
+      "totalPortfolioTrades": 428,
+      "portfolioWinRate": 46.26168224299065,
+      "avgConcurrentTrades": 3.9139002777410394,
+      "peakConcurrentTrades": 4
+    },
+    "strategyParameters": {
+      "dlc": {
+        "period": 40,
+        "pocLookback": 5,
+        "numProfiles": 1,
+        "pocColor": "#FF0000",
+        "vahColor": "#00FF00",
+        "valColor": "#0000FF",
+        "numBins": 100,
+        "vaPercentage": 0.7
+      },
+      "nwe": {
+        "enabled": true,
+        "bandwidth": 8,
+        "multiplier": 3,
+        "source": "close",
+        "repaint": false,
+        "upColor": "#00FFFF",
+        "downColor": "#FFFF00"
+      },
+      "clusters": {
+        "source": "volume",
+        "minVolumeThresholdMultiplier": 1.5,
+        "deltaThreshold": 0.7,
+        "lookbackPeriod": 20,
+        "confirmationBars": 1,
+        "buyColor": "#00FF00",
+        "sellColor": "#FF0000"
+      },
+      "risk": {
+        "atrPeriod": 14,
+        "positionSizePercentage": 0.02,
+        "stopLossMultiplier": 2,
+        "takeProfitMultiplier": 5,
+        "useTrailingStop": false,
+        "trailingStopOffsetMultiplier": 1.5,
+        "trailingStopStepMultiplier": 0.25,
+        "maxTradesPerDay": 2,
+        "maxRiskPerTradePercentage": 0.02,
+        "exitOnOppositeSignal": false
+      }
+    },
+    "firstTradeDetails": {
+      "timestamp": 1720386000000,
+      "direction": "short",
+      "entryPrice": 56558.6,
+      "pnl": 50.00000000000003,
+      "pair": "BTCUSDT"
+    },
+    "lastTradeDetails": {
+      "timestamp": 1746774000000,
+      "direction": "short",
+      "entryPrice": 165.05,
+      "pnl": -120.47424725568074,
+      "pair": "SOLUSDT"
+    },
+    "candlesProcessed": 30244,
+    "executionSource": "IMMEDIATE"
+  },
+  {
+    "testId": "cpu-portfolio-1759020021405-4pairs",
+    "timestamp": "2025-09-28T00:40:21.405Z",
+    "testType": "CPU_PORTFOLIO",
+    "pairSymbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "XRPUSDT",
+      "SOLUSDT"
+    ],
+    "timeframe": "1h",
+    "dateRange": {
+      "startDate": "2024-07-07",
+      "endDate": "2025-05-18"
+    },
+    "initialCapital": 1000,
+    "metrics": {
+      "totalPnl": 2766.6273974902942,
+      "totalPnlPercentage": 276.6627397490294,
+      "totalTrades": 428,
+      "winningTrades": 198,
+      "losingTrades": 230,
+      "winRate": 46.26168224299065,
+      "profitFactor": 1.1256637261480724,
+      "maxDrawdown": 40.1796240836535,
+      "durationMs": 206
+    },
+    "portfolioMetrics": {
+      "totalPortfolioTrades": 428,
+      "portfolioWinRate": 46.26168224299065,
+      "avgConcurrentTrades": 3.9139002777410394,
+      "peakConcurrentTrades": 4
+    },
+    "strategyParameters": {
+      "dlc": {
+        "period": 40,
+        "pocLookback": 5,
+        "numProfiles": 1,
+        "pocColor": "#FF0000",
+        "vahColor": "#00FF00",
+        "valColor": "#0000FF",
+        "numBins": 100,
+        "vaPercentage": 0.7
+      },
+      "nwe": {
+        "enabled": true,
+        "bandwidth": 8,
+        "multiplier": 3,
+        "source": "close",
+        "repaint": false,
+        "upColor": "#00FFFF",
+        "downColor": "#FFFF00"
+      },
+      "clusters": {
+        "source": "volume",
+        "minVolumeThresholdMultiplier": 1.5,
+        "deltaThreshold": 0.7,
+        "lookbackPeriod": 20,
+        "confirmationBars": 1,
+        "buyColor": "#00FF00",
+        "sellColor": "#FF0000"
+      },
+      "risk": {
+        "atrPeriod": 14,
+        "positionSizePercentage": 0.02,
+        "stopLossMultiplier": 2,
+        "takeProfitMultiplier": 5,
+        "useTrailingStop": false,
+        "trailingStopOffsetMultiplier": 1.5,
+        "trailingStopStepMultiplier": 0.25,
+        "maxTradesPerDay": 2,
+        "maxRiskPerTradePercentage": 0.02,
+        "exitOnOppositeSignal": false
+      }
+    },
+    "firstTradeDetails": {
+      "timestamp": 1720386000000,
+      "direction": "short",
+      "entryPrice": 56558.6,
+      "pnl": 50.00000000000003,
+      "pair": "BTCUSDT"
+    },
+    "lastTradeDetails": {
+      "timestamp": 1746774000000,
+      "direction": "short",
+      "entryPrice": 165.05,
+      "pnl": -120.47424725568074,
+      "pair": "SOLUSDT"
+    },
+    "candlesProcessed": 30244,
+    "executionSource": "IMMEDIATE"
+  },
+  {
+    "testId": "cpu-portfolio-1759089443687-4pairs",
+    "timestamp": "2025-09-28T19:57:23.687Z",
+    "testType": "CPU_PORTFOLIO",
+    "pairSymbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "XRPUSDT",
+      "SOLUSDT"
+    ],
+    "timeframe": "1h",
+    "dateRange": {
+      "startDate": "2024-07-07",
+      "endDate": "2025-05-18"
+    },
+    "initialCapital": 1000,
+    "metrics": {
+      "totalPnl": 2766.6273974902942,
+      "totalPnlPercentage": 276.6627397490294,
+      "totalTrades": 428,
+      "winningTrades": 198,
+      "losingTrades": 230,
+      "winRate": 46.26168224299065,
+      "profitFactor": 1.1256637261480724,
+      "maxDrawdown": 40.1796240836535,
+      "durationMs": 173
+    },
+    "portfolioMetrics": {
+      "totalPortfolioTrades": 428,
+      "portfolioWinRate": 46.26168224299065,
+      "avgConcurrentTrades": 3.9139002777410394,
+      "peakConcurrentTrades": 4
+    },
+    "strategyParameters": {
+      "dlc": {
+        "period": 40,
+        "pocLookback": 5,
+        "numProfiles": 1,
+        "pocColor": "#FF0000",
+        "vahColor": "#00FF00",
+        "valColor": "#0000FF",
+        "numBins": 100,
+        "vaPercentage": 0.7
+      },
+      "nwe": {
+        "enabled": true,
+        "bandwidth": 8,
+        "multiplier": 3,
+        "source": "close",
+        "repaint": false,
+        "upColor": "#00FFFF",
+        "downColor": "#FFFF00"
+      },
+      "clusters": {
+        "source": "volume",
+        "minVolumeThresholdMultiplier": 1.5,
+        "deltaThreshold": 0.7,
+        "lookbackPeriod": 20,
+        "confirmationBars": 1,
+        "buyColor": "#00FF00",
+        "sellColor": "#FF0000"
+      },
+      "risk": {
+        "atrPeriod": 14,
+        "positionSizePercentage": 0.02,
+        "stopLossMultiplier": 2,
+        "takeProfitMultiplier": 5,
+        "useTrailingStop": false,
+        "trailingStopOffsetMultiplier": 1.5,
+        "trailingStopStepMultiplier": 0.25,
+        "maxTradesPerDay": 2,
+        "maxRiskPerTradePercentage": 0.02,
+        "exitOnOppositeSignal": false
+      }
+    },
+    "firstTradeDetails": {
+      "timestamp": 1720386000000,
+      "direction": "short",
+      "entryPrice": 56558.6,
+      "pnl": 50.00000000000003,
+      "pair": "BTCUSDT"
+    },
+    "lastTradeDetails": {
+      "timestamp": 1746774000000,
+      "direction": "short",
+      "entryPrice": 165.05,
+      "pnl": -120.47424725568074,
+      "pair": "SOLUSDT"
+    },
+    "candlesProcessed": 30244,
+    "executionSource": "IMMEDIATE"
+  },
+  {
+    "testId": "cpu-portfolio-1759089458296-4pairs",
+    "timestamp": "2025-09-28T19:57:38.296Z",
+    "testType": "CPU_PORTFOLIO",
+    "pairSymbols": [
+      "BTCUSDT",
+      "ETHUSDT",
+      "XRPUSDT",
+      "SOLUSDT"
+    ],
+    "timeframe": "1h",
+    "dateRange": {
+      "startDate": "2024-07-07",
+      "endDate": "2025-05-18"
+    },
+    "initialCapital": 1000,
+    "metrics": {
+      "totalPnl": 2766.6273974902942,
+      "totalPnlPercentage": 276.6627397490294,
+      "totalTrades": 428,
+      "winningTrades": 198,
+      "losingTrades": 230,
+      "winRate": 46.26168224299065,
+      "profitFactor": 1.1256637261480724,
+      "maxDrawdown": 40.1796240836535,
+      "durationMs": 225
+    },
+    "portfolioMetrics": {
+      "totalPortfolioTrades": 428,
+      "portfolioWinRate": 46.26168224299065,
+      "avgConcurrentTrades": 3.9139002777410394,
+      "peakConcurrentTrades": 4
+    },
+    "strategyParameters": {
+      "dlc": {
+        "period": 40,
+        "pocLookback": 5,
+        "numProfiles": 1,
+        "pocColor": "#FF0000",
+        "vahColor": "#00FF00",
+        "valColor": "#0000FF",
+        "numBins": 100,
+        "vaPercentage": 0.7
+      },
+      "nwe": {
+        "enabled": true,
+        "bandwidth": 8,
+        "multiplier": 3,
+        "source": "close",
+        "repaint": false,
+        "upColor": "#00FFFF",
+        "downColor": "#FFFF00"
+      },
+      "clusters": {
+        "source": "volume",
+        "minVolumeThresholdMultiplier": 1.5,
+        "deltaThreshold": 0.7,
+        "lookbackPeriod": 20,
+        "confirmationBars": 1,
+        "buyColor": "#00FF00",
+        "sellColor": "#FF0000"
+      },
+      "risk": {
+        "atrPeriod": 14,
+        "positionSizePercentage": 0.02,
+        "stopLossMultiplier": 2,
+        "takeProfitMultiplier": 5,
+        "useTrailingStop": false,
+        "trailingStopOffsetMultiplier": 1.5,
+        "trailingStopStepMultiplier": 0.25,
+        "maxTradesPerDay": 2,
+        "maxRiskPerTradePercentage": 0.02,
+        "exitOnOppositeSignal": false
+      }
+    },
+    "firstTradeDetails": {
+      "timestamp": 1720386000000,
+      "direction": "short",
+      "entryPrice": 56558.6,
+      "pnl": 50.00000000000003,
+      "pair": "BTCUSDT"
+    },
+    "lastTradeDetails": {
+      "timestamp": 1746774000000,
+      "direction": "short",
+      "entryPrice": 165.05,
+      "pnl": -120.47424725568074,
+      "pair": "SOLUSDT"
+    },
+    "candlesProcessed": 30244,
+    "executionSource": "IMMEDIATE"
+  }
+]

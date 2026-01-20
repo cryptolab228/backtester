@@ -1,0 +1,94 @@
+[
+  {
+    "testId": "cpu-portfolio-1759766715385-4pairs",
+    "timestamp": "2025-10-06T16:05:15.385Z",
+    "testType": "CPU_PORTFOLIO",
+    "pairSymbols": [
+      "BTCUSDT",
+      "XRPUSDT",
+      "ETHUSDT",
+      "SOLUSDT"
+    ],
+    "timeframe": "1h",
+    "dateRange": {
+      "startDate": "2022-10-29",
+      "endDate": "2025-05-17"
+    },
+    "initialCapital": 1000,
+    "metrics": {
+      "totalPnl": 12011.090110858822,
+      "totalPnlPercentage": 1201.1090110858822,
+      "totalTrades": 1136,
+      "winningTrades": 533,
+      "losingTrades": 603,
+      "winRate": 46.91901408450704,
+      "profitFactor": 1.1017322656487207,
+      "maxDrawdown": 62.87956333812824,
+      "durationMs": 474
+    },
+    "portfolioMetrics": {
+      "totalPortfolioTrades": 1136,
+      "portfolioWinRate": 46.91901408450704,
+      "avgConcurrentTrades": 3.9284179906019245,
+      "peakConcurrentTrades": 4
+    },
+    "strategyParameters": {
+      "dlc": {
+        "period": 40,
+        "pocLookback": 5,
+        "numProfiles": 1,
+        "pocColor": "#FF0000",
+        "vahColor": "#00FF00",
+        "valColor": "#0000FF",
+        "numBins": 100,
+        "vaPercentage": 0.7
+      },
+      "nwe": {
+        "enabled": true,
+        "bandwidth": 8,
+        "multiplier": 3,
+        "source": "close",
+        "repaint": false,
+        "upColor": "#00FFFF",
+        "downColor": "#FFFF00"
+      },
+      "clusters": {
+        "source": "volume",
+        "minVolumeThresholdMultiplier": 1.5,
+        "deltaThreshold": 0.7,
+        "lookbackPeriod": 20,
+        "confirmationBars": 1,
+        "buyColor": "#00FF00",
+        "sellColor": "#FF0000"
+      },
+      "risk": {
+        "atrPeriod": 14,
+        "positionSizePercentage": 0.02,
+        "stopLossMultiplier": 2,
+        "takeProfitMultiplier": 5,
+        "useTrailingStop": false,
+        "trailingStopOffsetMultiplier": 1.5,
+        "trailingStopStepMultiplier": 0.25,
+        "maxTradesPerDay": 2,
+        "maxRiskPerTradePercentage": 0.02,
+        "exitOnOppositeSignal": false
+      }
+    },
+    "firstTradeDetails": {
+      "timestamp": 1667145600000,
+      "direction": "short",
+      "entryPrice": 20588,
+      "pnl": 48.45195974735871,
+      "pair": "BTCUSDT"
+    },
+    "lastTradeDetails": {
+      "timestamp": 1746716400000,
+      "direction": "long",
+      "entryPrice": 160.13,
+      "pnl": 599.5872550739832,
+      "pair": "SOLUSDT"
+    },
+    "candlesProcessed": 89380,
+    "executionSource": "IMMEDIATE"
+  }
+]
