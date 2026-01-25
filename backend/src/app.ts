@@ -15,6 +15,7 @@ import statisticsRoutes from './modules/statistics/statisticsRoutes';
 import debugRoutes from './routes/debugRoutes';
 import { scannerRoutes } from './modules/scanner';
 import sessionRoutes from './modules/scanner/routes/sessionRoutes';
+import optimizerRoutes from './modules/optimizer/optimizer.routes';
 
 async function startServer() {
   try {
@@ -54,6 +55,7 @@ async function startServer() {
     app.use('/api/debug', debugRoutes);
     app.use('/api/scanner', scannerRoutes);
     app.use('/api/sessions', sessionRoutes);
+    app.use('/api/optimizer', optimizerRoutes);
 
     const server = http.createServer(app);
 

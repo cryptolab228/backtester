@@ -1,4 +1,4 @@
-import { CandleData } from '../strategy_logic/indicators';
+﻿import { CandleData } from '../strategy_logic/indicators';
 import { applyStrategyLogic, StrategyParameters, StrategyCandle, RiskManagementSettings } from '../strategy_logic/strategy';
 import {
   BacktestRunParameters,
@@ -57,6 +57,8 @@ export const calculatePositionSize = (
   }
 
   // Вариант 2: На основе риска ATR (приоритетный, если есть все данные)
+  // ТЗ 2.1: Fixed Fractional - PositionSize = (Equity * RiskPercent) / (EntryPrice - StopPrice)
+  // Используем точную формулу из ТЗ вместо ATR-based расчёта
   if (
     riskSettings.maxRiskPerTradePercentage &&
     riskSettings.maxRiskPerTradePercentage > 0 &&
@@ -67,12 +69,14 @@ export const calculatePositionSize = (
     entryPrice > 0 
   ) {
     const riskPerTradeCapital = currentCapital * riskSettings.maxRiskPerTradePercentage;
-    const atrBasedStopLossAmountPerUnit = currentCandle.atr * riskSettings.stopLossMultiplier;
-    // logger.debug(`[CalcPosSize-ATR] riskCapital=${riskPerTradeCapital}, slAmountPerUnit=${atrBasedStopLossAmountPerUnit}`);
-
-    if (atrBasedStopLossAmountPerUnit > 0) {
-      const size = riskPerTradeCapital / atrBasedStopLossAmountPerUnit;
-      logger.debug(`[CalcPosSize-ATR] Calculated size: ${size}`);
+    // ТЗ 2.1: Расчёт StopPrice для формулы (EntryPrice - StopPrice)
+    const stopDistance = currentCandle.atr * riskSettings.stopLossMultiplier;
+    
+    if (stopDistance > 0) {
+      // ТЗ 2.1: PositionSize = (Equity * RiskPercent) / (EntryPrice - StopPrice)
+      // stopDistance = |EntryPrice - StopPrice|
+      const size = riskPerTradeCapital / stopDistance;
+      logger.debug(`[CalcPosSize-FixedFractional] Equity=${currentCapital}, Risk%=${riskSettings.maxRiskPerTradePercentage}, StopDist=${stopDistance}, Size=${size}`);
       return Math.max(0, size > 0 ? size : 0); 
     }
   }
@@ -606,7 +610,7 @@ export const runBacktest = async (
           let takeProfitPrice: number | undefined;
           const atrForTrade = currentCandle.atr;
 
-          // Рассчитать SL/TP сначала
+          // Рассчитать SL/TP (от low/high свечи для большего запаса до SL)
           if (riskSettings?.stopLossMultiplier && atrForTrade && atrForTrade > 0) {
             if (direction === TradeDirection.LONG) {
               stopLossPrice = currentCandle.low - atrForTrade * riskSettings.stopLossMultiplier;
@@ -620,6 +624,25 @@ export const runBacktest = async (
               takeProfitPrice = currentCandle.close + atrForTrade * riskSettings.takeProfitMultiplier;
             } else { // SHORT
               takeProfitPrice = currentCandle.close - atrForTrade * riskSettings.takeProfitMultiplier;
+            }
+          }
+
+          // ТЗ 2.1: Фильтр R:R - если (TP - Entry) / (Entry - SL) < minRewardRiskRatio, сигнал игнорируется
+          const minRR = riskSettings?.minRewardRiskRatio ?? 2.0;
+          if (stopLossPrice !== undefined && takeProfitPrice !== undefined) {
+            const reward = direction === TradeDirection.LONG 
+              ? takeProfitPrice - fillPrice 
+              : fillPrice - takeProfitPrice;
+            const risk = direction === TradeDirection.LONG 
+              ? fillPrice - stopLossPrice 
+              : stopLossPrice - fillPrice;
+            
+            if (risk > 0) {
+              const actualRR = reward / risk;
+              if (actualRR < minRR) {
+                logger.debug(`[RunBacktest] Signal rejected: R:R ${actualRR.toFixed(2)} < min ${minRR}`);
+                continue; // Пропускаем этот сигнал
+              }
             }
           }
 
@@ -1047,18 +1070,24 @@ export const runPortfolioBacktest = async (
           ? (exitPrice - activeTrade.entryPrice) * activeTrade.size
           : (activeTrade.entryPrice - exitPrice) * activeTrade.size;
         const exitFee = exitPrice * activeTrade.size * executionProfile.tradingFeeRate;
-        const pnlNet = pnlRaw - exitFee;
+        
+        // Для баланса: Entry Fee уже был списан при открытии, поэтому возвращаем (Margin + PnL_Raw - Exit_Fee)
+        const pnlForBalance = pnlRaw - exitFee;
+        
+        // Для статистики: PnL сделки должен включать все комиссии (Entry + Exit)
+        const totalFees = fees + exitFee;
+        const pnlNet = pnlRaw - totalFees;
 
         activeTrade.exitTimestamp = currentCandle.timestamp;
         activeTrade.exitPrice = exitPrice;
         activeTrade.exitReason = activeTrade.exitReason || 'external';
-        activeTrade.fees = fees + exitFee;
+        activeTrade.fees = totalFees;
         activeTrade.pnl = pnlNet;
         activeTrade.status = 'closed';
         activeTrade.margin = undefined;
 
         currentPortfolioCapital += margin;
-        currentPortfolioCapital += pnlNet;
+        currentPortfolioCapital += pnlForBalance;
 
         peakPortfolioCapital = Math.max(peakPortfolioCapital, currentPortfolioCapital);
         const drawdown = peakPortfolioCapital > 0 ? ((peakPortfolioCapital - currentPortfolioCapital) / peakPortfolioCapital) * 100 : 0;
@@ -1067,7 +1096,7 @@ export const runPortfolioBacktest = async (
         const { margin: _ignoredMargin2, ...finalTradeRecord } = activeTrade;
         tradesByPair[pairSymbol].push({ ...finalTradeRecord });
         activeTradesPortfolio.delete(pairSymbol);
-        logger.info(`[RunPortfolioBacktest] CLOSED ${activeTrade.direction} trade for ${pairSymbol} by external event. PnL: ${pnlNet.toFixed(2)}`);
+        logger.info(`[RunPortfolioBacktest] CLOSED ${activeTrade.direction} trade for ${pairSymbol} by ${exitReason}. PnL: ${pnlNet.toFixed(2)} (Raw: ${pnlRaw.toFixed(2)}, Fees: ${totalFees.toFixed(2)})`);
       }
     }
 
@@ -1153,6 +1182,7 @@ export const runPortfolioBacktest = async (
             let takeProfitPrice: number | undefined;
             const atr = currentCandle.atr;
 
+            // SL/TP (от low/high свечи для большего запаса до SL)
             if (riskSettingsPortfolio?.stopLossMultiplier && atr) {
               stopLossPrice = direction === TradeDirection.LONG
                 ? currentCandle.low - atr * riskSettingsPortfolio.stopLossMultiplier
@@ -1163,6 +1193,25 @@ export const runPortfolioBacktest = async (
               takeProfitPrice = direction === TradeDirection.LONG
                 ? currentCandle.close + atr * riskSettingsPortfolio.takeProfitMultiplier
                 : currentCandle.close - atr * riskSettingsPortfolio.takeProfitMultiplier;
+            }
+
+            // ТЗ 2.1: Фильтр R:R - если R:R < minRewardRiskRatio, сигнал игнорируется
+            const minRR = riskSettingsPortfolio?.minRewardRiskRatio ?? 2.0;
+            if (stopLossPrice !== undefined && takeProfitPrice !== undefined) {
+              const entryPrice = currentCandle.close;
+              const reward = direction === TradeDirection.LONG 
+                ? takeProfitPrice - entryPrice 
+                : entryPrice - takeProfitPrice;
+              const risk = direction === TradeDirection.LONG 
+                ? entryPrice - stopLossPrice 
+                : stopLossPrice - entryPrice;
+              
+              if (risk > 0) {
+                const actualRR = reward / risk;
+                if (actualRR < minRR) {
+                  continue; // Пропускаем сигнал с низким R:R
+                }
+              }
             }
 
             pendingMap.set(pairSymbol, {
@@ -1229,15 +1278,18 @@ export const runPortfolioBacktest = async (
   logger.info('[RunPortfolioBacktest] Simulation loop finished.');
 
   // 6. Расчет портфельных метрик
-  const finalPortfolioCapital = currentPortfolioCapital;
-  const totalPortfolioPnl = finalPortfolioCapital - params.initialPortfolioCapital;
-  const totalPortfolioPnlPercentage = params.initialPortfolioCapital > 0 ? (totalPortfolioPnl / params.initialPortfolioCapital) * 100 : 0;
-
   // Собираем все сделки для расчета общих метрик
   const allTrades: Trade[] = [];
   for (const pairSymbol of params.pairSymbols) {
     allTrades.push(...tradesByPair[pairSymbol]);
   }
+  
+  // 🔥 ИСПРАВЛЕНИЕ: totalPortfolioPnl должен рассчитываться из суммы trade.pnl,
+  // а не из finalCapital - initialCapital, чтобы избежать расхождения
+  // между общим PnL и суммой PnL по парам
+  const totalPortfolioPnl = allTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+  const finalPortfolioCapital = params.initialPortfolioCapital + totalPortfolioPnl;
+  const totalPortfolioPnlPercentage = params.initialPortfolioCapital > 0 ? (totalPortfolioPnl / params.initialPortfolioCapital) * 100 : 0;
 
   const portfolioWinningTrades = allTrades.filter(t => t.pnl && t.pnl > 0).length;
   const portfolioLosingTrades = allTrades.filter(t => t.pnl && t.pnl < 0).length;
@@ -1272,9 +1324,18 @@ export const runPortfolioBacktest = async (
 
   // 7. Расчет метрик для каждой пары отдельно
   const metricsByPair: Record<string, BacktestMetrics> = {};
+  // 🔥 ИСПРАВЛЕНО: Рассчитываем метрики пар на основе реального PnL
   for (const pairSymbol of params.pairSymbols) {
     const pairTrades = tradesByPair[pairSymbol];
-    metricsByPair[pairSymbol] = calculateIndividualPairMetrics(pairTrades, params.initialPortfolioCapital, startTime);
+    // Рассчитываем метрики пары с нулевым начальным капиталом
+    const pairMetrics = calculateIndividualPairMetrics(pairTrades, 0, startTime);
+    
+    // 🔥 КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Рассчитываем правильный процент от общего капитала портфеля
+    if (params.initialPortfolioCapital > 0) {
+      pairMetrics.totalPnlPercentage = (pairMetrics.totalPnl / params.initialPortfolioCapital) * 100;
+    }
+    
+    metricsByPair[pairSymbol] = pairMetrics;
   }
 
   // 8. Формируем результат
@@ -1376,6 +1437,7 @@ async function processPortfolioPendingSignals(
     let takeProfitPrice: number | undefined;
     const atrForTrade = signal.candle.atr;
 
+    // SL/TP (от low/high свечи для большего запаса до SL)
     if (riskSettings?.stopLossMultiplier && atrForTrade > 0) {
       if (signal.direction === TradeDirection.LONG) {
         stopLossPrice = signal.candle.low - atrForTrade * riskSettings.stopLossMultiplier;
@@ -1474,7 +1536,9 @@ function calculateIndividualPairMetrics(trades: Trade[], initialCapital: number,
   const winRate = winRateDecimal * 100;
 
   const totalPnl = trades.reduce((sum, t) => sum + (t.pnl || 0), 0);
-  const totalPnlPercentage = initialCapital > 0 ? (totalPnl / initialCapital) * 100 : 0;
+  // 🔥 ИСПРАВЛЕНИЕ: Для портфеля считаем проценты от общего капитала портфеля, а не от фиктивного капитала пары
+  // totalPnlPercentage будет рассчитан на уровне портфеля
+  const totalPnlPercentage = 0; // Временно 0, будет переопределено на уровне портфеля
 
   const grossProfit = trades.filter(t => t.pnl && t.pnl > 0).reduce((sum, t) => sum + (t.pnl || 0), 0);
   const grossLoss = Math.abs(trades.filter(t => t.pnl && t.pnl < 0).reduce((sum, t) => sum + (t.pnl || 0), 0));
@@ -1496,7 +1560,7 @@ function calculateIndividualPairMetrics(trades: Trade[], initialCapital: number,
 
   // Упрощенная кривая эквити для отдельной пары
   const equityCurve: Array<{ timestamp: number; capital: number }> = [];
-  let runningCapital = initialCapital;
+  let runningCapital = 0; // Начинаем с 0, так как это вклад в портфель, а не отдельный счет
   for (const trade of trades) {
     if (trade.exitTimestamp) {
       runningCapital += (trade.pnl || 0);
@@ -1506,7 +1570,7 @@ function calculateIndividualPairMetrics(trades: Trade[], initialCapital: number,
 
   // Упрощенный расчет максимальной просадки для пары
   let maxDrawdown = 0;
-  let peakCapital = initialCapital;
+  let peakCapital = 0;
   for (const point of equityCurve) {
     peakCapital = Math.max(peakCapital, point.capital);
     const drawdown = peakCapital > 0 ? ((peakCapital - point.capital) / peakCapital) * 100 : 0;

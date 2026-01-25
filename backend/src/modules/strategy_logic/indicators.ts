@@ -420,3 +420,141 @@ export const calculateCumulativeDelta = (approxDelta: number[]): number[] => {
   
   return cvd;
 };
+
+/**
+ * ТЗ 2.2: Расчёт ADX (Average Directional Index) для определения режима рынка
+ * ADX > 25 = TREND режим, ADX < 20 = RANGE режим
+ * @param candles - массив свечей
+ * @param period - период расчёта (по умолчанию 14)
+ * @returns массив значений ADX для каждой свечи
+ */
+export const calculateADX = (candles: CandleData[], period: number = 14): (number | undefined)[] => {
+  if (!candles || candles.length < period * 2) {
+    return new Array(candles.length).fill(undefined);
+  }
+
+  const adxValues: (number | undefined)[] = new Array(candles.length).fill(undefined);
+  const plusDM: number[] = new Array(candles.length).fill(0);
+  const minusDM: number[] = new Array(candles.length).fill(0);
+  const trueRanges: number[] = new Array(candles.length).fill(0);
+
+  // 1. Рассчитать +DM, -DM и TR для каждой свечи
+  for (let i = 1; i < candles.length; i++) {
+    const high = Number(candles[i].high);
+    const low = Number(candles[i].low);
+    const prevHigh = Number(candles[i - 1].high);
+    const prevLow = Number(candles[i - 1].low);
+    const prevClose = Number(candles[i - 1].close);
+
+    // True Range
+    const tr1 = high - low;
+    const tr2 = Math.abs(high - prevClose);
+    const tr3 = Math.abs(low - prevClose);
+    trueRanges[i] = Math.max(tr1, tr2, tr3);
+
+    // Directional Movement
+    const upMove = high - prevHigh;
+    const downMove = prevLow - low;
+
+    if (upMove > downMove && upMove > 0) {
+      plusDM[i] = upMove;
+    }
+    if (downMove > upMove && downMove > 0) {
+      minusDM[i] = downMove;
+    }
+  }
+
+  // 2. Сглаживание по Wilder (первые значения - простое среднее)
+  let smoothedTR = 0;
+  let smoothedPlusDM = 0;
+  let smoothedMinusDM = 0;
+
+  for (let i = 1; i <= period; i++) {
+    smoothedTR += trueRanges[i];
+    smoothedPlusDM += plusDM[i];
+    smoothedMinusDM += minusDM[i];
+  }
+
+  // 3. Рассчитать DX и ADX
+  const dxValues: number[] = new Array(candles.length).fill(0);
+  
+  for (let i = period; i < candles.length; i++) {
+    if (i > period) {
+      // Wilder's smoothing
+      smoothedTR = smoothedTR - (smoothedTR / period) + trueRanges[i];
+      smoothedPlusDM = smoothedPlusDM - (smoothedPlusDM / period) + plusDM[i];
+      smoothedMinusDM = smoothedMinusDM - (smoothedMinusDM / period) + minusDM[i];
+    }
+
+    // +DI и -DI
+    const plusDI = smoothedTR > 0 ? (smoothedPlusDM / smoothedTR) * 100 : 0;
+    const minusDI = smoothedTR > 0 ? (smoothedMinusDM / smoothedTR) * 100 : 0;
+
+    // DX
+    const diSum = plusDI + minusDI;
+    const diDiff = Math.abs(plusDI - minusDI);
+    dxValues[i] = diSum > 0 ? (diDiff / diSum) * 100 : 0;
+  }
+
+  // 4. ADX = сглаженный DX
+  let adxSum = 0;
+  for (let i = period; i < period * 2; i++) {
+    adxSum += dxValues[i];
+  }
+  adxValues[period * 2 - 1] = adxSum / period;
+
+  for (let i = period * 2; i < candles.length; i++) {
+    const prevADX = adxValues[i - 1] ?? 0;
+    adxValues[i] = ((prevADX * (period - 1)) + dxValues[i]) / period;
+  }
+
+  return adxValues;
+};
+
+/**
+ * ТЗ 2.3: Расчёт Swing High/Low для технического Stop Loss
+ * @param candles - массив свечей
+ * @param lookback - количество свечей для поиска экстремума
+ * @returns объект с массивами swingHigh и swingLow
+ */
+export const calculateSwingPoints = (
+  candles: CandleData[], 
+  lookback: number = 5
+): { swingHigh: (number | null)[]; swingLow: (number | null)[] } => {
+  const swingHigh: (number | null)[] = new Array(candles.length).fill(null);
+  const swingLow: (number | null)[] = new Array(candles.length).fill(null);
+
+  if (!candles || candles.length < lookback * 2 + 1) {
+    return { swingHigh, swingLow };
+  }
+
+  for (let i = lookback; i < candles.length - lookback; i++) {
+    let isSwingHigh = true;
+    let isSwingLow = true;
+
+    for (let j = 1; j <= lookback; j++) {
+      if (candles[i].high <= candles[i - j].high || candles[i].high <= candles[i + j].high) {
+        isSwingHigh = false;
+      }
+      if (candles[i].low >= candles[i - j].low || candles[i].low >= candles[i + j].low) {
+        isSwingLow = false;
+      }
+    }
+
+    if (isSwingHigh) swingHigh[i] = candles[i].high;
+    if (isSwingLow) swingLow[i] = candles[i].low;
+  }
+
+  // Заполнить последние значения для использования в текущей свече
+  let lastSwingHigh: number | null = null;
+  let lastSwingLow: number | null = null;
+
+  for (let i = 0; i < candles.length; i++) {
+    if (swingHigh[i] !== null) lastSwingHigh = swingHigh[i];
+    if (swingLow[i] !== null) lastSwingLow = swingLow[i];
+    swingHigh[i] = lastSwingHigh;
+    swingLow[i] = lastSwingLow;
+  }
+
+  return { swingHigh, swingLow };
+};

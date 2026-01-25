@@ -1,0 +1,71 @@
+# Backtester V2 - Windsurf Rules
+
+## Project Overview
+High-performance cryptocurrency backtesting and scanning platform.
+- **Stack**: Vue 3 + TypeScript (frontend), Node.js + TypeScript + Express (backend)
+- **Database**: PostgreSQL + TypeORM
+- **Queue**: Redis + BullMQ
+- **Exchange**: Bybit (primary), OKX (compatibility)
+
+## Project Structure
+```
+backend/src/modules/
+  backtester/       - Backtest engine (spot + futures)
+  scanner/          - Real-time market scanner
+  optimizer/        - Parameter optimization (grid search)
+  futures/          - Leverage, funding, liquidation
+  strategy_logic/   - Indicators, strategy, profiles
+  data/             - Data loading services
+
+frontend/src/
+  views/            - BacktesterView, ScannerView, SettingsView
+  stores/           - Pinia stores (backtestStore, scannerStore, etc.)
+  components/       - UI components
+```
+
+## Key Documentation
+- `promt.md` - Main project plan
+- `README.md` - Quick start guide
+- `BYBIT_ALGORITM.MD` - Bybit data loading algorithm
+- `frontend/READMEF.md` - Frontend documentation
+
+## Development Rules
+
+### Code Style
+- Use TypeScript strict mode
+- Follow existing code patterns
+- Minimal diffs when editing
+- No comments unless explicitly requested
+- Russian language for user communication
+
+### Workflow
+1. Read relevant files before making changes
+2. Verify changes don't conflict with existing logic
+3. Update documentation if adding new features
+4. Run linters/tests after changes
+5. Don't commit unless explicitly requested
+
+### Commands
+- `npm run dev` - Start development (frontend + backend)
+- `npm run build` - Build project
+- `cd backend && npm run optimize:futures` - Run optimizer
+
+### Logs
+- Backend logs: `backend/logs/combined.log`
+- Error logs: `backend/logs/error.log`
+
+### Key Modules Status
+| Module | Status |
+|--------|--------|
+| Backtester (spot/futures) | Complete |
+| Scanner (Bybit Demo/Testnet) | Complete |
+| Optimizer | Complete |
+| Data Loading | Complete |
+| UI Results | 70% |
+| Testing | 30% |
+
+## Response Format
+- Be concise, answer in Russian
+- List problems by priority
+- Provide actionable steps
+- Reference specific files/methods

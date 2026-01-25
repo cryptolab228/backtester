@@ -43,6 +43,11 @@ const routes: Array<RouteRecordRaw> = [
         path: '/sessions',
         name: 'Sessions',
         component: () => import(/* webpackChunkName: "sessions" */ '@/views/SessionsView.vue'),
+      },
+      {
+        path: '/optimizer',
+        name: 'Optimizer',
+        component: () => import(/* webpackChunkName: "optimizer" */ '@/views/OptimizerView.vue'),
       }
     ],
   },

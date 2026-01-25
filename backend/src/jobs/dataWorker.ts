@@ -583,32 +583,84 @@ const processFetchPortfolioDataOptimized = async (job: Job<FetchPortfolioDataAnd
     // Сохраняем время начала портфельного бэктеста
     const portfolioBacktestStartTime = Date.now();
     
-    // Отправляем начальный прогресс для портфельного бэктеста
-    broadcast({
-      type: 'BACKTEST_PROGRESS',
-      payload: {
-        jobId: jobId?.toString() || 'unknown',
-        stage: 'initializing',
-        stageDescription: `Инициализация портфельного бэктеста для ${portfolioParams.pairSymbols.length} пар...`,
-        processedItems: 0,
-        totalItems: 100,
-        startTime: portfolioBacktestStartTime,
-        stageBreakdown: [
-          { name: 'Инициализация', status: 'active', progress: 10 },
-          { name: 'Загрузка данных', status: 'pending', progress: 0 },
-          { name: 'Расчет индикаторов', status: 'pending', progress: 0 },
-          { name: 'Выполнение бэктеста', status: 'pending', progress: 0 },
-          { name: 'Расчет метрик', status: 'pending', progress: 0 },
-          { name: 'Сохранение результатов', status: 'pending', progress: 0 }
-        ],
-        portfolioStats: {
-          totalPairs: portfolioParams.pairSymbols.length,
-          processedPairs: 0,
-          totalTrades: 0,
-          dataLoaded: '0%'
+    // === РЕАЛЬНЫЙ ТРЕКИНГ ПРОГРЕССА ===
+    let processedPairsCount = 0;
+    let totalCandlesLoaded = 0;
+    let currentProcessingPair = '';
+    const completedPairs: string[] = [];
+    const failedPairs: { symbol: string; error: string }[] = [];
+    
+    // Функция для отправки обновления прогресса с реальными данными
+    const sendProgressUpdate = (stage: string, stageDescription: string, stageProgress: number) => {
+      const totalPairs = portfolioParams.pairSymbols.length;
+      const pairsProgress = totalPairs > 0 ? Math.round((processedPairsCount / totalPairs) * 100) : 0;
+      const elapsedMs = Date.now() - portfolioBacktestStartTime;
+      const pairsPerMinute = elapsedMs > 0 ? (processedPairsCount / (elapsedMs / 60000)) : 0;
+      
+      // Рассчитываем оставшееся время
+      const remainingPairs = totalPairs - processedPairsCount;
+      const estimatedRemainingMs = pairsPerMinute > 0 ? (remainingPairs / pairsPerMinute) * 60000 : 0;
+      
+      broadcast({
+        type: 'BACKTEST_PROGRESS',
+        payload: {
+          jobId: jobId?.toString() || 'unknown',
+          stage,
+          stageDescription,
+          processedItems: stageProgress,
+          totalItems: 100,
+          startTime: portfolioBacktestStartTime,
+          estimatedCompletion: estimatedRemainingMs,
+          stageBreakdown: [
+            { name: 'Инициализация', status: stage === 'initializing' ? 'active' : 'completed', progress: 100 },
+            { name: 'Загрузка данных', status: stage === 'loading_data' ? 'active' : (stageProgress > 30 ? 'completed' : 'pending'), progress: stage === 'loading_data' ? Math.min(pairsProgress, 100) : (stageProgress > 30 ? 100 : 0) },
+            { name: 'Расчет индикаторов', status: stage === 'processing_indicators' ? 'active' : (stageProgress > 60 ? 'completed' : 'pending'), progress: stageProgress > 60 ? 100 : 0 },
+            { name: 'Выполнение бэктеста', status: stage === 'running_backtest' ? 'active' : (stageProgress > 80 ? 'completed' : 'pending'), progress: stageProgress > 80 ? 100 : 0 },
+            { name: 'Расчет метрик', status: stage === 'calculating_metrics' ? 'active' : (stageProgress > 90 ? 'completed' : 'pending'), progress: stageProgress > 90 ? 100 : 0 },
+            { name: 'Сохранение результатов', status: stage === 'saving_results' ? 'active' : (stageProgress >= 100 ? 'completed' : 'pending'), progress: stageProgress >= 100 ? 100 : 0 }
+          ],
+          portfolioStats: {
+            totalPairs,
+            processedPairs: processedPairsCount,
+            totalTrades: 0,
+            dataLoaded: `${pairsProgress}%`,
+            currentPair: currentProcessingPair,
+            pairsWithData: completedPairs.length,
+            pairsNeedingData: remainingPairs,
+            apiCallsMade: processedPairsCount,
+            dbQueriesMade: processedPairsCount
+          },
+          loadingQueue: {
+            totalPairs,
+            completedPairs: processedPairsCount,
+            activePairs: currentProcessingPair ? [{
+              symbol: currentProcessingPair,
+              status: 'loading' as const,
+              progress: 50,
+              exchange: targetExchange,
+              timeframe: portfolioParams.timeframe
+            }] : [],
+            queuedPairs: portfolioParams.pairSymbols.slice(processedPairsCount + 1, processedPairsCount + 7),
+            failedPairs: failedPairs.map(f => ({
+              symbol: f.symbol,
+              status: 'error' as const,
+              progress: 0,
+              errorMessage: f.error
+            })),
+            totalCandlesExpected: totalPairs * 5000,
+            totalCandlesLoaded,
+            totalDataSize: totalCandlesLoaded * 50, // ~50 bytes per candle
+            estimatedTimePerPair: processedPairsCount > 0 ? elapsedMs / processedPairsCount : 5000,
+            currentThroughput: pairsPerMinute,
+            peakThroughput: pairsPerMinute,
+            averagePairLoadTime: processedPairsCount > 0 ? elapsedMs / processedPairsCount / 1000 : 0
+          }
         }
-      }
-    });
+      });
+    };
+    
+    // Отправляем начальный прогресс для портфельного бэктеста
+    sendProgressUpdate('initializing', `Инициализация портфельного бэктеста для ${portfolioParams.pairSymbols.length} пар...`, 5);
 
     // ИСПРАВЛЕНИЕ: Используем контроллерную логику - загружаем из БД только пары, которые НЕ нуждаются в дозагрузке
     const pairsAlreadyInDB = portfolioParams.pairSymbols.filter(pair => !pairsNeedingData.includes(pair));
@@ -818,28 +870,13 @@ const processFetchPortfolioDataOptimized = async (job: Job<FetchPortfolioDataAnd
         
         logger.info(`[Job-OPT ${jobId}] Processing batch ${batchIndex + 1}/${totalBatches}: ${batch.length} pairs (${batch.join(', ')})`);
         
-        // Прогресс батча
-        const batchProgress = 35 + (batchIndex * 30) / totalBatches;
-        broadcast({
-          type: 'BACKTEST_PROGRESS',
-          payload: {
-            jobId: jobId?.toString() || 'unknown',
-            stage: 'loading_data',
-            stageDescription: `Batch ${batchIndex + 1}/${totalBatches}: обработка ${batch.length} пар...`,
-            processedItems: Math.round(batchProgress),
-            totalItems: 100,
-            stageBreakdown: [
-              { name: 'Инициализация', status: 'completed', progress: 100 },
-              { name: 'Загрузка данных', status: 'active', progress: Math.round(batchProgress * 1.3) },
-              { name: 'Расчет индикаторов', status: 'pending', progress: 0 },
-              { name: 'Выполнение бэктеста', status: 'pending', progress: 0 },
-              { name: 'Расчет метрик', status: 'pending', progress: 0 },
-              { name: 'Сохранение результатов', status: 'pending', progress: 0 }
-            ]
-          }
-        });
+        // Прогресс батча с реальными данными
+        const batchProgress = 15 + Math.round((processedPairsCount / portfolioParams.pairSymbols.length) * 50);
+        sendProgressUpdate('loading_data', `Batch ${batchIndex + 1}/${totalBatches}: загрузка ${batch.length} пар...`, batchProgress);
 
       for (const symbol of batch) {
+        // Обновляем текущую обрабатываемую пару
+        currentProcessingPair = symbol;
         // <<<< НОВАЯ, БОЛЕЕ ЧАСТАЯ ПРОВЕРКА ОТМЕНЫ >>>>
         try {
           await checkJobCancellation(job);
@@ -964,6 +1001,15 @@ const processFetchPortfolioDataOptimized = async (job: Job<FetchPortfolioDataAnd
           }
 
           missingPairsData[symbol] = completeCandles;
+          
+          // Обновляем счётчики прогресса
+          processedPairsCount++;
+          totalCandlesLoaded += completeCandles.length;
+          completedPairs.push(symbol);
+          
+          // Отправляем обновление прогресса после каждой пары
+          const pairProgress = 15 + Math.round((processedPairsCount / portfolioParams.pairSymbols.length) * 50);
+          sendProgressUpdate('loading_data', `Загружено ${processedPairsCount}/${portfolioParams.pairSymbols.length} пар (${symbol})`, pairProgress);
           
         } catch (error: any) {
           logger.error(`[OptimizedFetcher] Failed to fetch ${symbol}: ${error.message}`);

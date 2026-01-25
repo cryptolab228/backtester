@@ -125,6 +125,7 @@ export class ScannerSessionController {
           timeframes: timeframes,
           tradingPairs: detailedPairs, // Сохраняем детальную структуру
           mode: effectiveMode,
+          strategyParams: DefaultStrategyParameters, // Сохраняем актуальные параметры в снапшот
         },
         riskSettingsSnapshot: DefaultStrategyParameters.risk,
         notes: notes || undefined,

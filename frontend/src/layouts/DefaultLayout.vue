@@ -88,6 +88,7 @@ const pageTitle = computed(() => {
     'DataManagement': 'Управление данными',
     'QueueManager': 'Менеджер очереди',
     'Backtester': 'Бэктестер',
+    'Optimizer': 'Оптимизатор параметров',
     'Scanner': 'Торговый сканнер',
     'Sessions': 'Торговые сессии',
     'Settings': 'Настройки'
@@ -116,6 +117,11 @@ const menuItems = ref([
     label: 'Бэктестер',
     icon: 'pi pi-chart-line',
     to: '/backtester'
+  },
+  {
+    label: 'Оптимизатор',
+    icon: 'pi pi-sliders-h',
+    to: '/optimizer'
   },
   {
     label: 'Сканнер',

@@ -189,4 +189,29 @@ public/build/
 
 # OS generated files
 .DS_Store
-Thumbs.db 
+Thumbs.db
+
+# Project-specific ignores
+books/
+portfolio-results/
+*.pdf
+
+# Temporary analysis scripts
+analyze_*.js
+example
+github
+
+# Backup files
+*.backup
+*.bak
+*.debug
+*.pre_fix
+*.broken.ts
+
+# Test results and logs
+backend/public/portfolio-results/
+backend/backend/
+.trash/
+
+# Cursor rules (personal)
+.cursor/

@@ -7,7 +7,7 @@ import { getAvailableTradingPairs } from '@/services/apiService'; // <-- Имп�
 import { apiClient } from '@/services/apiService'; // <-- Импорт apiClient
 
 // Добавляем версионирование для автоматического обновления дефолтов при изменении структуры
-const STRATEGY_PARAMS_VERSION = '1.1'; // Увеличиваем версию при изменении дефолтных значений
+const STRATEGY_PARAMS_VERSION = '1.2'; // Увеличено с 1.1 до 1.2 для обновления на новые проф. параметры
 const STRATEGY_PARAMS_LOCAL_STORAGE_KEY = `strategyParameters_v${STRATEGY_PARAMS_VERSION}`;
 
 export interface TradingPairItem { // <-- Интерфейс для элементов списка
@@ -47,47 +47,45 @@ export interface PairMetricResponse {
 // Адаптировано к новым типам, соответствующим backend/src/modules/strategy_logic/strategy.ts
 const initialStrategyParameters: StrategyParameters = {
   dlc: {
-    period: 40, // Новый параметр из Pine: dlc_period
-    pocLookback: 5, // Новый параметр из Pine: poc_lookback
+    period: 24, // Рекомендовано: 24 (длина сессии для 1h)
+    pocLookback: 5,
     numProfiles: 1, 
     pocColor: '#FF0000',
     vahColor: '#00FF00',
     valColor: '#0000FF',
-    numBins: 100, // Изменено с 20 на 100, чтобы соответствовать внутренней логике Pine для профиля
-    vaPercentage: 0.7, // Соответствует Pine: value_area_percent (70.0 / 100)
+    numBins: 100,
+    vaPercentage: 0.7, // Соответствует стандарту CME
   },
   nwe: {
-    enabled: true, // Новый параметр из Pine: use_nwe
-    bandwidth: 8.0, // Новый параметр из Pine: h
-    multiplier: 3.0, // Переименовано с atrMultiplier и значение изменено (Pine: mult)
-    source: 'close', // Новый параметр из Pine: nwe_src
-    repaint: false, // Новый параметр из Pine: repaint
-    // lookbackPeriod и atrPeriod удалены, т.к. не имеют прямого аналога во входных данных Pine NWE
+    enabled: true,
+    bandwidth: 8.0,
+    multiplier: 2.2, // Рекомендовано: 2.2 (правило 2 SD)
+    source: 'close',
+    repaint: false,
     upColor: '#00FFFF',
     downColor: '#FFFF00',
   },
   clusters: {
     source: 'volume',
-    minVolumeThresholdMultiplier: 1.5, // Переименовано с thresholdMultiplier и значение изменено (Pine: min_volume_threshold)
-    deltaThreshold: 0.7, // Новый параметр из Pine: delta_threshold
-    lookbackPeriod: 20, // Соответствует периоду SMA для avg_volume в Pine
-    confirmationBars: 1, // Изменено с 0, чтобы соответствовать Pine: cluster[1]
+    minVolumeThresholdMultiplier: 2.0, // Рекомендовано: 2.0 (отсечение шума)
+    deltaThreshold: 0.7,
+    lookbackPeriod: 20,
+    confirmationBars: 1,
     buyColor: '#00FF00',
     sellColor: '#FF0000',
   },
-  risk: { // Изменено с riskManagement на risk
-    atrPeriod: 14, // Соответствует Pine: atr_period
-    positionSizePercentage: 0.02, // Изменено с 0.01 (Pine: risk_percent 2.0 / 100)
-    stopLossMultiplier: 2.0, // Изменено с 1.5 (Pine: stop_loss_atr)
-    takeProfitMultiplier: 5.0, // Изменено с 3 (Pine: take_profit_atr)
-    useTrailingStop: true, // Изменено с false (Pine: use_trailing_stop)
-    trailingStopOffsetMultiplier: 1.5, // Оптимизировано с 2.0 на 1.5 (Pine: trail_offset_mult)
-    trailingStopStepMultiplier: 0.25, // Оптимизировано с 1.0 на 0.25 (Pine: trailing_step)
-    maxTradesPerDay: 2, // Изменено с 0 (Pine: max_trades_per_day)
-    maxRiskPerTradePercentage: 0.01, // Существующий параметр, нет прямого аналога в Pine, но может использоваться для доп. контроля
-    exitOnOppositeSignal: false, // Новый параметр: выход по противоположному сигналу
+  risk: {
+    atrPeriod: 14,
+    positionSizePercentage: 0.02,
+    stopLossMultiplier: 2.0,
+    takeProfitMultiplier: 5.0,
+    useTrailingStop: true,
+    trailingStopOffsetMultiplier: 1.5,
+    trailingStopStepMultiplier: 0.25,
+    maxTradesPerDay: 2,
+    maxRiskPerTradePercentage: 0.02, // Синхронизировано с positionSizePercentage
+    exitOnOppositeSignal: false,
   },
-  // globalAtrPeriod и avgVolumePeriod удалены, используются аналоги внутри risk и clusters
 };
 
 // Функция для безопасной загрузки и ОЧИСТКИ из localStorage

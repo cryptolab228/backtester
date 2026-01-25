@@ -10,7 +10,9 @@ import {
   NWEResultPoint,
   calculateAvgVolume,
   calculateApproxDelta,
-  calculateCumulativeDelta, // Imported
+  calculateCumulativeDelta,
+  calculateADX,
+  calculateSwingPoints,
   NWECalculationParams
 } from './indicators';
 
@@ -59,11 +61,20 @@ export interface RiskManagementSettings {
   takeProfitMultiplier?: number;
   useTrailingStop?: boolean;
   trailingStopOffsetMultiplier?: number;
-  trailingStopStepMultiplier?: number; // Новый параметр
+  trailingStopStepMultiplier?: number;
   maxTradesPerDay?: number;
   positionSizePercentage?: number;
   maxRiskPerTradePercentage?: number;
-  exitOnOppositeSignal?: boolean; // Выход при противоположном сигнале
+  exitOnOppositeSignal?: boolean;
+  
+  // ТЗ 2.1: Фильтр R:R - минимальное соотношение Reward:Risk для входа
+  minRewardRiskRatio?: number; // По умолчанию 2.0
+  
+  // ТЗ 2.2: ADX Regime Filter
+  useRegimeFilter?: boolean; // Включить фильтрацию по ADX
+  adxPeriod?: number; // Период ADX, по умолчанию 14
+  adxTrendThreshold?: number; // ADX > этого = TREND режим, по умолчанию 25
+  adxRangeThreshold?: number; // ADX < этого = RANGE режим, по умолчанию 20
 }
 
 export interface StrategyParameters {
@@ -240,6 +251,16 @@ export const applyStrategyLogic = (
   const avgVolumeValues = calculateAvgVolume(candles, avgVolPeriod);
   const approxDeltaValues = calculateApproxDelta(candles);
   const cumulativeDeltaValues = calculateCumulativeDelta(approxDeltaValues);
+  
+  // ТЗ 2.2: Расчёт ADX для Regime Filter
+  const useRegimeFilter = params.risk?.useRegimeFilter ?? false;
+  const adxPeriod = params.risk?.adxPeriod ?? 14;
+  const adxTrendThreshold = params.risk?.adxTrendThreshold ?? 25;
+  const adxRangeThreshold = params.risk?.adxRangeThreshold ?? 20;
+  const adxValues = useRegimeFilter ? calculateADX(candles, adxPeriod) : [];
+  
+  // ТЗ 2.3: Расчёт Swing Points для технического SL
+  const swingPoints = calculateSwingPoints(candles, 5);
   
   // Логирование перед вызовом calculateVolumeProfile
   if (candles && candles.length > 0) { // Используем преобразованный массив 'candles'
@@ -525,24 +546,42 @@ export const applyStrategyLogic = (
         }
     }
     
+    // --- ТЗ 2.2: Regime Filter (ADX) ---
+    // Определяем режим рынка: TREND (ADX > 25), RANGE (ADX < 20), или NEUTRAL (20-25)
+    const currentADX = useRegimeFilter && adxValues.length > index ? adxValues[index] : undefined;
+    const isTrendMode = currentADX !== undefined && currentADX > adxTrendThreshold;
+    const isRangeMode = currentADX !== undefined && currentADX < adxRangeThreshold;
+    
     // --- Расчет силы для LONG ---
-    // VPA FIX: Если это Falling Knife, мы блокируем вообще все лонг сигналы на этой свече?
-    // Нет, возможно DLC/NWE отработали идеально "шпилькой". 
-    // Но Falling Knife обычно закрывается внизу. Если close > nweLower, это уже не совсем нож, или нож который откупили.
-    // Оставим проверку только для кластера пока.
-
-    if (dlcLongActive || nweLongActive || clusterLongActive || trendPullbackLongActive || isDeltaDivergenceLong) { // Если есть хотя бы один компонент
-        isLongSignal = true; // Базовое условие входа (уточнить по вашей стратегии)
+    // ТЗ 2.2: В TREND режиме разрешены только Trend Pullback, запрещены NWE Extremum
+    // В RANGE режиме разрешены NWE Extremum и Absorption, запрещены пробойные
+    
+    let longSignalAllowed = false;
+    
+    if (useRegimeFilter) {
+        if (isTrendMode) {
+            // TREND: только Trend Pullback
+            longSignalAllowed = trendPullbackLongActive || (dlcLongActive && clusterLongActive);
+        } else if (isRangeMode) {
+            // RANGE: NWE Extremum, Absorption, DLC
+            longSignalAllowed = nweLongActive || (isAbsorption && clusterLongActive) || dlcLongActive;
+        } else {
+            // NEUTRAL: любой сигнал с подтверждением
+            longSignalAllowed = dlcLongActive || nweLongActive || clusterLongActive || trendPullbackLongActive || isDeltaDivergenceLong;
+        }
+    } else {
+        // Без Regime Filter - любой сигнал
+        longSignalAllowed = dlcLongActive || nweLongActive || clusterLongActive || trendPullbackLongActive || isDeltaDivergenceLong;
+    }
+    
+    if (longSignalAllowed) {
+        isLongSignal = true;
         
-        // VPA Filter for ALL signals: 
-        // Если мы ловим нож (Wide Spread Down), и закрытие близко к Low -> ОПАСНО.
-        // Если закрытие > Low + 25% Range -> Это Pinbar (Rejection), можно брать.
-        // Если VPA включен, отфильтруем "плохие" ножи для всех типов сигналов
+        // VPA Filter: отфильтруем "плохие" ножи
         if (vpaEnabled && isWideSpread && candle.close < candle.open) {
              const range = candle.high - candle.low;
              const rejection = candle.close - candle.low;
              if (range > 0 && (rejection / range) < 0.25) {
-                 // Close is in the bottom 25% of a wide bear candle -> DO NOT BUY
                  isLongSignal = false;
              }
         }
@@ -550,22 +589,13 @@ export const applyStrategyLogic = (
         if (isLongSignal) {
             if (dlcLongActive) calculatedSignalStrength += 1.0;
             if (nweLongActive) calculatedSignalStrength += 1.0;
-            if (trendPullbackLongActive) calculatedSignalStrength += 1.0; // Bonus for Trend Pullback
-            if (isDeltaDivergenceLong) calculatedSignalStrength += 1.5; // High confidence for Divergence
+            if (trendPullbackLongActive) calculatedSignalStrength += 1.5; // Бонус за тренд
+            if (isDeltaDivergenceLong) calculatedSignalStrength += 1.5;
             if (clusterLongActive) {
                 calculatedSignalStrength += 1.0;
-                calculatedSignalStrength += (strategyCandle.volumeClusterStrength ?? 0) * 0.2; // Добавляем силу самого кластера
-                
-                // Bonus for Absorption
+                calculatedSignalStrength += (strategyCandle.volumeClusterStrength ?? 0) * 0.2;
                 if (isAbsorption) calculatedSignalStrength += 0.5;
             }
-
-            // Бонусы за конфлюентность
-            let confBonusLong = 0;
-            const longSignalsCount = (dlcLongActive ? 1:0) + (nweLongActive ? 1:0) + (clusterLongActive ? 1:0) + (trendPullbackLongActive ? 1:0) + (isDeltaDivergenceLong ? 1:0);
-            if (longSignalsCount === 2) confBonusLong = 1.0;
-            if (longSignalsCount >= 3) confBonusLong = 1.5; 
-            calculatedSignalStrength += confBonusLong;
         }
     }
 
@@ -596,42 +626,44 @@ export const applyStrategyLogic = (
          }
     }
 
-    // --- Расчет силы для SHORT ---
-    // Важно: если уже есть Long сигнал на этой свече, обычно Short не рассматриваем (или наоборот)
-    // Для простоты, сейчас позволим им быть независимыми, но в реальной системе это нужно будет разруливать
-    if (!isLongSignal && (dlcShortActive || nweShortActive || clusterShortActive || trendPullbackShortActive || isDeltaDivergenceShort)) {
-        isShortSignal = true; 
+    // --- Расчет силы для SHORT с Regime Filter ---
+    let shortSignalAllowed = false;
+    
+    if (useRegimeFilter) {
+        if (isTrendMode) {
+            shortSignalAllowed = trendPullbackShortActive || (dlcShortActive && clusterShortActive);
+        } else if (isRangeMode) {
+            shortSignalAllowed = nweShortActive || (isAbsorption && clusterShortActive) || dlcShortActive;
+        } else {
+            shortSignalAllowed = dlcShortActive || nweShortActive || clusterShortActive || trendPullbackShortActive || isDeltaDivergenceShort;
+        }
+    } else {
+        shortSignalAllowed = dlcShortActive || nweShortActive || clusterShortActive || trendPullbackShortActive || isDeltaDivergenceShort;
+    }
+    
+    if (!isLongSignal && shortSignalAllowed) {
+        isShortSignal = true;
         
-        // VPA Filter for ALL signals:
-        // Если мы шортим "Ракету" (Wide Spread Up), и закрытие близко к High -> ОПАСНО.
+        // VPA Filter
         if (vpaEnabled && isWideSpread && candle.close > candle.open) {
              const range = candle.high - candle.low;
              const rejection = candle.high - candle.close;
              if (range > 0 && (rejection / range) < 0.25) {
-                 // Close is in the top 25% of a wide bull candle -> DO NOT SELL
                  isShortSignal = false;
              }
         }
         
         if (isShortSignal) {
-            calculatedSignalStrength = 0; // Сбрасываем, если был расчет для лонга, но лонг не активировался
+            calculatedSignalStrength = 0;
             if (dlcShortActive) calculatedSignalStrength += 1.0;
             if (nweShortActive) calculatedSignalStrength += 1.0;
-            if (trendPullbackShortActive) calculatedSignalStrength += 1.0; // Bonus for Trend Pullback
-            if (isDeltaDivergenceShort) calculatedSignalStrength += 1.5; // High confidence for Divergence
+            if (trendPullbackShortActive) calculatedSignalStrength += 1.5;
+            if (isDeltaDivergenceShort) calculatedSignalStrength += 1.5;
             if (clusterShortActive) {
                 calculatedSignalStrength += 1.0;
                 calculatedSignalStrength += (strategyCandle.volumeClusterStrength ?? 0) * 0.2;
-                
-                // Bonus for Absorption
                 if (isAbsorption) calculatedSignalStrength += 0.5;
             }
-            
-            let confBonusShort = 0;
-            const shortSignalsCount = (dlcShortActive ? 1:0) + (nweShortActive ? 1:0) + (clusterShortActive ? 1:0) + (trendPullbackShortActive ? 1:0) + (isDeltaDivergenceShort ? 1:0);
-            if (shortSignalsCount === 2) confBonusShort = 1.0;
-            if (shortSignalsCount >= 3) confBonusShort = 1.5;
-            calculatedSignalStrength += confBonusShort;
         }
     }
     
